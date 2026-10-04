@@ -16,6 +16,11 @@
         Remove-Item -Force $Shim
         Write-Host "removed $Shim"
     }
+    $Shim2 = Join-Path $BinDir 'arkad-agent.cmd'
+    if (Test-Path $Shim2) {
+        Remove-Item -Force $Shim2
+        Write-Host "removed $Shim2"
+    }
 
     if (Test-Path $InstallDir) {
         Remove-Item -Recurse -Force $InstallDir

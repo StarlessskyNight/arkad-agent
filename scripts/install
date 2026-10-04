@@ -158,6 +158,7 @@ PYTHON="$(choose_python)"
 
 BIN_DIR="$(choose_bin_dir)"
 LINK="${BIN_DIR}/arkad-agent"
+ARKAD_LINK="${BIN_DIR}/arkad"
 
 if [ -d "${INSTALL_DIR}/.git" ]; then
   echo "updating ${INSTALL_DIR}"
@@ -204,10 +205,11 @@ if [ -e "${LINK}" ] && [ ! -L "${LINK}" ]; then
 fi
 
 ln -sfn "${INSTALL_DIR}/.venv/bin/arkad-agent" "${LINK}"
+ln -sfn "${INSTALL_DIR}/.venv/bin/arkad" "${ARKAD_LINK}"
 
 echo
 echo "Arkad installed."
-echo "Command: ${LINK}"
+echo "Command: ${ARKAD_LINK} (alias: ${LINK})"
 
 case ":${PATH}:" in
   *":${BIN_DIR}:"*)

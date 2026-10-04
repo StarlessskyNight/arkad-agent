@@ -150,6 +150,10 @@ for name in ("arkad.tui.app", "arkad.main"):
     if ((Test-Path $Shim) -and -not (Select-String -Path $Shim -SimpleMatch $Marker -Quiet)) {
         throw "error: $Shim already exists and was not created by this installer`n  move it first, then rerun this installer"
     }
+    $Shim2 = Join-Path $BinDir 'arkad-agent.cmd'
+    if ((Test-Path $Shim2) -and -not (Select-String -Path $Shim2 -SimpleMatch $Marker -Quiet)) {
+        throw "error: $Shim2 already exists and was not created by this installer`n  move it first, then rerun this installer"
+    }
     # Write %LOCALAPPDATA% literally when we can: .cmd files are read in the
     # console code page, which would garble a non-ASCII user name.
     $Target = Join-Path $VenvDir 'Scripts\arkad.exe'
@@ -157,6 +161,7 @@ for name in ("arkad.tui.app", "arkad.main"):
         $Target = '%LOCALAPPDATA%' + $Target.Substring($env:LOCALAPPDATA.Length)
     }
     Set-Content -Path $Shim -Value "@echo off`r`n$Marker`r`n`"$Target`" %*" -Encoding ASCII -ErrorAction Stop
+    Set-Content -Path $Shim2 -Value "@echo off`r`n$Marker`r`n`"$Target`" %*" -Encoding ASCII -ErrorAction Stop
 
     Write-Host ''
     Write-Host 'Arkad installed.'
