@@ -21,7 +21,7 @@ Windows (PowerShell):
 powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/install.ps1 | iex"
 ```
 
-Uninstall (keeps your config/data):
+Uninstall (removes everything — install, config, data, shims, PATH entries):
 
 ```bash
 # Linux / macOS
@@ -32,8 +32,6 @@ curl -fsSL https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/s
 # Windows (PowerShell)
 powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/uninstall.ps1 | iex"
 ```
-
-Add `--purge` (bash) / `-Purge` (PowerShell) to also delete config and data.
 
 From a checkout:
 
