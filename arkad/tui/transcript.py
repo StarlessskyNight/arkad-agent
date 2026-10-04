@@ -252,9 +252,45 @@ class CyberfunkWelcomeBlock(Block):
     def __init__(self, info: dict[str, Any]) -> None:
         super().__init__()
         self.info = info
+        self._last_cpu: tuple[int, int] | None = None
 
     def start_shine(self) -> None:  # API-compatible with WelcomeBlock
-        pass
+        self.set_interval(2.0, self.refresh)
+
+    @staticmethod
+    def _ram_gb() -> str:
+        try:
+            mem: dict[str, int] = {}
+            for line in open("/proc/meminfo"):
+                k, _, rest = line.partition(":")
+                mem[k] = int(rest.strip().split()[0])  # kB
+            total = mem["MemTotal"] / 1024 / 1024
+            avail = mem.get("MemAvailable", mem.get("MemFree", 0)) / 1024 / 1024
+            return f"{total - avail:.0f}/{total:.0f}"
+        except Exception:
+            return "0/64"
+
+    def _cpu_pct(self) -> float:
+        try:
+            fields = open("/proc/stat").readline().split()[1:]
+            nums = [int(x) for x in fields]
+            idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+            total = sum(nums)
+            if self._last_cpu is None:
+                self._last_cpu = (total, idle)
+                return 0.0
+            dt = total - self._last_cpu[0]
+            di = idle - self._last_cpu[1]
+            self._last_cpu = (total, idle)
+            return 0.0 if dt <= 0 else max(0.0, min(100.0, (1 - di / dt) * 100))
+        except Exception:
+            try:
+                import os
+
+                load = os.getloadavg()[0]
+                return max(0.0, min(100.0, load / os.cpu_count() * 100))
+            except Exception:
+                return 0.0
 
     def plain_text(self) -> str:
         return str(self.render())
@@ -275,9 +311,17 @@ class CyberfunkWelcomeBlock(Block):
         status = Text()
         status.append("⚡ LINK: SECURE ", style=f"bold {ui.OK}")
         status.append("│ ", style=FD)
-        status.append("▒▒▒▒▒▒▒▒░░░░ RAM 64G ", style=CY)
+        used_gb, _, total_gb = self._ram_gb().partition("/")
+        total_f = float(total_gb) if total_gb else 64.0
+        used_f = float(used_gb) if used_gb else 0.0
+        blocks = int(round(used_f / total_f * 8)) if total_f else 0
+        ram_bar = "▒" * blocks + "░" * (8 - blocks)
+        status.append(f"{ram_bar} RAM {used_f:.0f}G/{total_f:.0f}G ", style=CY)
         status.append("│ ", style=FD)
-        status.append("▇▆▅▄▂ CPU 12% ", style=MG)
+        cpu = self._cpu_pct()
+        cfill = max(0, min(4, int(cpu / 25)))
+        cpu_bar = "▇" * cfill + "░" * (4 - cfill)
+        status.append(f"{cpu_bar} CPU {cpu:.0f}% ", style=MG)
         status.append("│ ", style=FD)
         status.append(f"UPTIME: {int(_time.monotonic() // 60):04d}:{int(_time.monotonic() % 60):02d} ", style=VI)
 
