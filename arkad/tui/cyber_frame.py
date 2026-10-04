@@ -98,16 +98,18 @@ class CyberFrame(Widget):
         margin: 0 0 1 0;
     }
     CyberFrame Horizontal#cyber_mid {
-        height: 16;
+        height: 14;
         margin: 0 0 1 0;
     }
     CyberFrame Tree#cyber_tree {
         width: 34;
+        height: 14;
         border: round $jv-border;
         padding: 0 1;
     }
     CyberFrame Static#cyber_info {
         width: 1fr;
+        height: 14;
         border: round $jv-border;
         padding: 1 2;
         color: $jv-fg-mute;
@@ -175,6 +177,7 @@ class CyberFrame(Widget):
             self.app.query_one("#composer", Horizontal).display = False  # type here, not there
         except Exception:
             pass
+        self.call_after_refresh(lambda: self.query_one("#cyber_input", Input).focus())
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         node = event.node

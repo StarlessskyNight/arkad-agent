@@ -390,7 +390,10 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
         self._bg_attach()  # job notices + auto-wake (mixins/bg_jobs.py)
         self._mcp_auth_attach()  # sign-in bar + sidebar follow MCP registry events
 
-        self.query_one("#prompt", PromptArea).focus()
+        try:
+            self.query_one("#cyber_input", Input).focus()
+        except Exception:
+            self.query_one("#prompt", PromptArea).focus()
         self.call_after_refresh(self._render_welcome_intro)
         self.set_interval(2.0, self._slow_refresh)
 
