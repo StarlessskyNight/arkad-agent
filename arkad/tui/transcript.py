@@ -219,6 +219,136 @@ class WelcomeBlock(Block):
         return out
 
 
+# ── cyberfunk welcome ──────────────────────────────────────────────────────
+
+_CF_TREE = (
+    " ├─ aether_core/",
+    " │ ├─ spark.dll",
+    " │ └─ mesh.obj",
+    " ├─ ui_config/",
+    " │ ├─ colors.hex",
+    " │ └─ layout.json",
+)
+
+_CF_HEX = (
+    " 0F 1A 2B 3C 4D",
+    " FF 00 FF 39 14",
+    " 00 FF FF 09 09",
+    " 1A 2B 3C 4D 5E",
+    " 39 14 FF 00 FF",
+)
+
+
+class CyberfunkWelcomeBlock(Block):
+    """Cyberfunk boot screen: status bar, data-stream sidebar, render pane."""
+
+    DEFAULT_CSS = """
+    CyberfunkWelcomeBlock {
+        padding: 0 0 0 0;
+        margin: 1 0 0 0;
+    }
+    """
+
+    def __init__(self, info: dict[str, Any]) -> None:
+        super().__init__()
+        self.info = info
+
+    def start_shine(self) -> None:  # API-compatible with WelcomeBlock
+        pass
+
+    def plain_text(self) -> str:
+        return str(self.render())
+
+    def render(self) -> Text:
+        import time as _time
+
+        i = self.info
+        out = Text()
+        B = ui.BORDER_FC          # neon cyan borders
+        FD = ui.FG_DIM            # dim data
+        FM = ui.FG_MUTE           # muted text
+        F = ui.FG                 # bright text
+        CY = ui.ACCENT            # cyber cyan
+        MG = ui.ACCENT_2          # electric magenta
+        VI = ui.ACCENT_3          # violet
+
+        status = Text()
+        status.append("⚡ LINK: SECURE ", style=f"bold {ui.OK}")
+        status.append("│ ", style=FD)
+        status.append("▒▒▒▒▒▒▒▒░░░░ RAM 64G ", style=CY)
+        status.append("│ ", style=FD)
+        status.append("▇▆▅▄▂ CPU 12% ", style=MG)
+        status.append("│ ", style=FD)
+        status.append(f"UPTIME: {int(_time.monotonic() // 60):04d}:{int(_time.monotonic() % 60):02d} ", style=VI)
+
+        out.append("╔" + "═" * 78 + "╗\n", style=B)
+        out.append("║ ", style=B)
+        out.append_text(status)
+        out.append(" " * max(0, 78 - len(str(status)) - 1))
+        out.append("║\n", style=B)
+        out.append("╟" + "─" * 78 + "╢\n", style=B)
+
+        left = ["┌─[ ROOT_DIR ]─────┐"] + [f"│{t:<18}│" for t in _CF_TREE] + [
+            "├─[ HEX_STREAM ]───┤"
+        ] + [f"│{h:<18}│" for h in _CF_HEX] + ["└──────────────────┘"]
+        right = ["┌─[ RENDER_VIEW : AETHER_CONTACT.JPG ]" + "─" * 16 + "┐"]
+        right_mid = [
+            "│" + " " * 53 + "│",
+            "│" + " " * 53 + "│",
+            "│" + f"  v{i.get('version', '')}  {_clip(str(i.get('cwd', '')), 60)}".ljust(53) + "│",
+            "│" + " " * 53 + "│",
+            "│" + "          [ CYBERNODE TUI — AETHER CONTACT ]".ljust(53) + "│",
+            "│" + " " * 53 + "│",
+            "│" + "  neon cyan mesh · magenta spark".ljust(53) + "│",
+            "│" + " " * 53 + "│",
+            "│" + " " * 53 + "│",
+            "│" + " " * 53 + "│",
+            "└" + "─" * 53 + "┘",
+        ]
+        rows = max(len(left), len(right_mid) + 1)
+        for n in range(rows):
+            out.append("║ ", style=B)
+            if n < len(left):
+                line = left[n]
+                style = CY if (n == 0 or n == len(_CF_TREE) + 1 or n == len(_CF_TREE) + 1 + len(_CF_HEX) + 1) else (F if ("aether_core" in line or "ui_config" in line) else FD)
+                out.append(line, style=style)
+                out.append(" " * max(0, 20 - len(line)))
+            else:
+                out.append(" " * 20)
+            out.append(" ")
+            if n == 0:
+                out.append(right[0], style=MG)
+            elif n - 1 < len(right_mid):
+                out.append(right_mid[n - 1], style=FM)
+            else:
+                out.append(" " * 55)
+            out.append(" ║\n", style=B)
+
+        out.append("╚" + "═" * 78 + "╝\n", style=B)
+        out.append("  ", style="")
+        out.append("harness@cybernode:~$ ", style=f"bold {CY}")
+        out.append("█", style=f"bold {MG}")
+        hints = (
+            ("/", "commands"),
+            ("@", "files"),
+            ("!", "shell"),
+            ("tab", "agents"),
+            ("⇧↵", "newline"),
+            ("?", "shortcuts"),
+        )
+        out.append("\n  ")
+        for n, (key, label) in enumerate(hints):
+            if n:
+                out.append("   ")
+            out.append(key, style=f"bold {FM}")
+            out.append(f" {label}", style=FD)
+        if i.get("warning"):
+            out.append("\n\n  ")
+            out.append("● ", style=ui.WARN)
+            out.append_text(_markup(i["warning"]))
+        return out
+
+
 # ── user ──────────────────────────────────────────────────────────────────
 
 _USER_MAX_LINES = 24

@@ -491,7 +491,13 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
 
     def _mount_welcome(self) -> None:
         # Always called on an empty (or just-cleared) transcript.
-        welcome = WelcomeBlock(self._welcome_info())
+        from . import theme as _ui_theme
+        from .transcript import CyberfunkWelcomeBlock
+
+        if _ui_theme.active_theme() == "cyberfunk":
+            welcome = CyberfunkWelcomeBlock(self._welcome_info())
+        else:
+            welcome = WelcomeBlock(self._welcome_info())
         self.query_one("#transcript", Transcript).mount(welcome)
         self.call_after_refresh(welcome.start_shine)
         if state.update_result:
