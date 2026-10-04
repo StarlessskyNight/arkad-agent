@@ -23,7 +23,11 @@ end re-attaches.
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 from rich import box
@@ -144,6 +148,48 @@ class WelcomeBlock(Block):
         self.info = info
         self._shine_t0: float | None = None
         self._last_cpu: tuple[int, int] | None = None
+        self._stats_proc: subprocess.Popen | None = None
+        self._stats_buf: str = ""
+        self._stats: dict[str, float] | None = None
+
+    # ── live stats: prefer the Rust `arkad-stats` daemon (zero-delay JSON
+    # lines, one per second); fall back to direct /proc reads in Python.
+
+    _STATS_BIN = (
+        Path(__file__).resolve().parents[2]
+        / "rust" / "arkad-stats" / "target" / "release" / "arkad-stats"
+    )
+
+    def _pump_rust_stats(self) -> dict[str, float] | None:
+        try:
+            if self._stats_proc is None and self._STATS_BIN.is_file():
+                self._stats_proc = subprocess.Popen(
+                    [str(self._STATS_BIN)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                os.set_blocking(self._stats_proc.stdout.fileno(), False)
+            if self._stats_proc is None or self._stats_proc.stdout is None:
+                return None
+            try:
+                chunk = os.read(self._stats_proc.stdout.fileno(), 65536)
+                if chunk:
+                    self._stats_buf += chunk.decode(errors="replace")
+            except BlockingIOError:
+                pass
+            if "\n" in self._stats_buf:
+                *lines, self._stats_buf = self._stats_buf.split("\n")
+                for line in reversed(lines):
+                    try:
+                        parsed = json.loads(line)
+                        if {"ram_used_gb", "ram_total_gb", "cpu_pct"} <= parsed.keys():
+                            self._stats = parsed
+                            break
+                    except (ValueError, AttributeError):
+                        continue
+            return self._stats
+        except Exception:
+            return None
 
     @staticmethod
     def _ram_stats() -> tuple[float, float]:
@@ -180,9 +226,13 @@ class WelcomeBlock(Block):
                 return 0.0
 
     def _stats_line(self) -> Text:
+        stats = self._pump_rust_stats()
+        if stats is not None:
+            used, total, cpu = stats["ram_used_gb"], stats["ram_total_gb"], stats["cpu_pct"]
+        else:
+            used, total = self._ram_stats()
+            cpu = self._cpu_pct()
         out = Text()
-        used, total = self._ram_stats()
-        cpu = self._cpu_pct()
         out.append("  ")
         if total > 0:
             blocks = max(0, min(8, int(used / total * 8)))
