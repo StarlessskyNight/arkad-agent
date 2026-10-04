@@ -452,12 +452,32 @@ PALETTES.update({
         "accent_2": "#81a1c1",
         "accent_3": "#b48ead",
     },
+    "cyberfunk": {
+        "bg_0": "#04070a",
+        "bg_1": "#080d12",
+        "bg_2": "#0d141b",
+        "bg_3": "#121b24",
+        "bg_4": "#182531",
+        "border": "#16303a",
+        "border_fc": "#00e5ff",
+        "fg": "#d7f9ff",
+        "fg_mute": "#7fb3c0",
+        "fg_dim": "#4a6b78",
+        "sep": "#0a1a20",
+        "ok": "#00ffa3",
+        "warn": "#ffd600",
+        "err": "#ff2d55",
+        "accent": "#00e5ff",
+        "accent_2": "#ff2d95",
+        "accent_3": "#7c4dff",
+    },
 })
 
 
 # One-line descriptions for the /theme picker (order = picker order).
 THEME_DESCRIPTIONS: dict[str, str] = {
     "opencode": "near-black, peach accent, blue + violet highlights",
+    "cyberfunk": "abyssal black, neon cyan + hot magenta, phosphor glow",
     "claude": "warm charcoal, terracotta accent, lavender highlights",
     "tokyonight": "night-city navy, soft blue + purple",
     "catppuccin": "mocha pastels, mauve accent",
