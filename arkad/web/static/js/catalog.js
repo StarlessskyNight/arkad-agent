@@ -1,0 +1,142 @@
+/** Command catalog shared by the ⌘K palette and the composer's slash menu.
+ *
+ * Item kinds:
+ *   picker — opens a web picker (sessions, models, …)
+ *   action — runs a local handler (new chat, toggles, theme)
+ *   cmd    — sent to Arkad as a slash command; `laptop` ones open a dialog
+ *            in the terminal, so the web shows a hint instead of nothing
+ *   fill   — only puts the command in the composer (needs an argument)
+ */
+export const CATALOG = [
+  { group: 'Go to', picker: 'session', cmd: '/session', label: 'Sessions', desc: 'Resume or delete a saved session', icon: 'history', keys: 'resume history' },
+  { group: 'Go to', picker: 'model', cmd: '/model', label: 'Model', desc: 'Switch the model or provider', icon: 'cpu', keys: 'provider llm' },
+  { group: 'Go to', picker: 'agent', cmd: '/agent', label: 'Agent', desc: 'Activate an agent profile', icon: 'sparkles', keys: 'profile persona' },
+  { group: 'Go to', picker: 'skill', cmd: '/skill', label: 'Skills', desc: 'Browse installed skill packs', icon: 'book-open' },
+  { group: 'Go to', picker: 'mcp', cmd: '/mcp', label: 'MCP servers', desc: 'Connect or disconnect tool servers', icon: 'plug', keys: 'tools servers' },
+  { group: 'Go to', picker: 'mcp', pickerArg: 'market', label: 'Browse MCP marketplace', desc: 'Connect Slack, Notion, Linear, GitHub and 50+ more in a click', icon: 'sparkles', keys: 'mcp add install connect integration slack notion linear github figma jira clickup canva servers marketplace store' },
+  { group: 'Go to', picker: 'command', cmd: '/command', label: 'Custom commands', desc: 'Make your own slash commands from prompts you reuse', icon: 'terminal', keys: 'commands template templates prompt snippet macro custom new create edit shortcut' },
+  { group: 'Go to', action: 'inspector-changes', label: 'File changes', desc: 'Files Arkad created, edited or deleted, with diffs', icon: 'file-diff', keys: 'diff review git patch files edited changed side panel' },
+  { group: 'Go to', action: 'attach', label: 'Attach files', desc: 'Photos, video, audio, PDFs or documents (or drop / paste them)', icon: 'paperclip', keys: 'upload image photo picture screenshot file media document pdf video camera' },
+  { group: 'Go to', action: 'inspector-activity', label: 'Activity', desc: 'What Arkad is doing, its tool calls and background jobs', icon: 'activity', keys: 'tools jobs progress timeline running side panel' },
+  { group: 'Go to', picker: 'provider', cmd: '/provider', label: 'Providers and login', desc: 'Sign in, add API keys, switch provider', icon: 'key-round', keys: 'login logout sign in oauth api key keys account anthropic claude chatgpt codex openrouter opencode zen' },
+
+  { group: 'Conversation', action: 'session_new', cmd: '/new', label: 'New chat', desc: 'Start a fresh conversation', icon: 'plus', keys: 'clear fresh' },
+  { group: 'Conversation', cmd: '/reset', label: 'Reset', desc: 'Clear the conversation history', icon: 'rotate-ccw' },
+  { group: 'Conversation', cmd: '/history', label: 'History', desc: 'Summarise the messages so far', icon: 'list' },
+  { group: 'Conversation', cmd: '/stats', label: 'Stats', desc: 'Session time, messages and tools', icon: 'chart-column' },
+  { group: 'Conversation', fill: true, cmd: '/export ', label: 'Export', desc: 'Save the conversation as markdown', icon: 'download' },
+  { group: 'Conversation', cmd: '/copy', label: 'Copy last reply', desc: 'Copy the latest answer on your computer', icon: 'copy' },
+  { group: 'Conversation', fill: true, cmd: '/loop ', label: 'Loop a task', desc: 'Repeat a task; Arkad paces itself (/loop 5m … for a fixed interval)', icon: 'timer', keys: 'repeat schedule watch interval recurring' },
+  { group: 'Conversation', cmd: '/loop stop', label: 'Stop the loop', desc: 'End the running /loop', icon: 'square', keys: 'loop end cancel' },
+
+  { group: 'Settings', action: 'toggle-think', label: 'Extended thinking', desc: 'Think before answering', icon: 'brain', toggle: 'think_mode' },
+  { group: 'Settings', action: 'toggle-trace', label: 'Tool trace', desc: 'Show thinking and tool details', icon: 'list-tree', toggle: 'show_internal' },
+  { group: 'Settings', action: 'toggle-thoughts', label: 'Show thoughts here', desc: 'Thinking in this browser only', icon: 'eye', toggle: 'showThoughts' },
+  { group: 'Settings', action: 'toggle-auto', label: 'Auto-approve commands', desc: 'Run shell commands without asking', icon: 'shield', toggle: 'auto_approve', warn: true },
+  { group: 'Settings', action: 'theme', label: 'Light or dark', desc: 'Flip the colour mode', icon: 'sun-moon', keys: 'dark light mode theme soft dim' },
+  { group: 'Settings', action: 'glass', label: 'Frosted glass', desc: 'Translucent panels; messages scroll under them', icon: 'blend', keys: 'glass frosted blur translucent transparent transparency appearance' },
+  { group: 'Settings', action: 'appearance', label: 'Appearance', desc: 'Light, dark or system, soft contrast, frosted glass, accent colour, compact view', icon: 'palette', keys: 'theme accent color colour compact notification soft dim dark light glass frosted blur' },
+
+  { group: 'Memory', cmd: '/memory', label: 'Memory', desc: 'Personal facts Arkad remembers', icon: 'database', laptop: true },
+  { group: 'Memory', cmd: '/lesson', label: 'Lessons', desc: 'Lessons the agent has saved', icon: 'graduation-cap', laptop: true },
+  { group: 'Memory', picker: 'pin', cmd: '/pin', label: 'Pinned context', desc: 'Rules sent with every message: add, edit or unpin them', icon: 'pin', keys: 'pin pinned unpin context rules instructions always standing system prompt' },
+  { group: 'Memory', cmd: '/scan', label: 'Scan project', desc: 'Deep scan of identity and docs', icon: 'scan-search' },
+
+  { group: 'On your computer', cmd: '/settings', label: 'All settings', desc: 'Every preference, in the terminal', icon: 'sliders-horizontal', laptop: true },
+  { group: 'On your computer', cmd: '/theme', label: 'Terminal theme', desc: 'Colours of the terminal app', icon: 'palette', laptop: true },
+  { group: 'On your computer', cmd: '/agent init', label: 'Scaffold .arkad/', desc: 'Create the project agent folders', icon: 'folder-plus', laptop: true },
+
+  { group: 'Help', action: 'shortcuts', label: 'Keyboard shortcuts', desc: 'Every key that does something here', icon: 'keyboard', keys: 'keys hotkeys help' },
+  { group: 'Help', cmd: '/help', label: 'Help', desc: 'Every command, explained', icon: 'circle-help' },
+  { group: 'Help', cmd: '/version', label: 'Version', desc: 'Installed Arkad version', icon: 'info' },
+  { group: 'Help', cmd: '/upgrade', label: 'Upgrade', desc: 'Update Arkad to the latest release', icon: 'circle-arrow-up' },
+];
+
+/** Bare commands the web handles itself instead of opening a terminal dialog. */
+export const LOCAL_PICKERS = {
+  '/model': 'model',
+  '/models': 'model',
+  '/session': 'session',
+  '/sessions': 'session',
+  '/resume': 'session',
+  '/agent': 'agent',
+  '/agents': 'agent',
+  '/skill': 'skill',
+  '/skills': 'skill',
+  '/mcp': 'mcp',
+  '/command': 'command',
+  '/commands': 'command',
+  '/pin': 'pin',
+  '/pins': 'pin',
+  '/provider': 'provider',
+  '/providers': 'provider',
+  '/login': 'provider',
+  '/logout': 'provider',
+  '/auth': 'provider',
+  '/key': 'provider',
+  '/keys': 'provider',
+};
+
+/** Commands whose argument the web picker takes too: `/provider openrouter`. */
+export const LOCAL_PICKERS_WITH_ARG = new Set(['/provider', '/providers', '/login', '/key']);
+
+/** `/command new|edit|show …` open the web editor; the rest (`global on`, `export x` …) go to Arkad. */
+export function commandPickerArg(value) {
+  const m = /^\/commands?\s+(new|add|create|edit|show|open)\b\s*(.*)$/i.exec(String(value || '').trim());
+  return m ? `${m[1].toLowerCase()} ${m[2]}`.trim() : null;
+}
+
+// ─── Custom commands (commands.js fills this from /api/commands) ──────────
+
+let customItems = [];
+
+/** The user's own `/name` templates as catalog items (`custom: true`). */
+export function setCustomItems(items) {
+  customItems = Array.isArray(items) ? items : [];
+}
+
+export function getCustomItems() {
+  return customItems;
+}
+
+let refresher = null;
+
+/** commands.js registers how to reload the list; menus call `wantCustomItems` as they open. */
+export function setCustomRefresher(fn) {
+  refresher = fn;
+}
+
+export function wantCustomItems() {
+  refresher?.();
+}
+
+/** Everything the ⌘K palette lists: "Go to", then the user's commands, then the rest. */
+export function allItems() {
+  if (!customItems.length) return CATALOG;
+  const at = CATALOG.findIndex((it) => it.group !== 'Go to');
+  return [...CATALOG.slice(0, at), ...customItems, ...CATALOG.slice(at)];
+}
+
+export const LAPTOP_COMMANDS = new Set(
+  CATALOG.filter((c) => c.laptop).map((c) => c.cmd.trim()),
+);
+
+/** Case-insensitive match over label, command, description and keywords. */
+export function matchItem(item, q) {
+  if (!q) return true;
+  const hay = `${item.label} ${item.cmd || ''} ${item.desc || ''} ${item.keys || ''} ${item.group}`.toLowerCase();
+  return q.split(/\s+/).every((part) => hay.includes(part));
+}
+
+/** Rank: command prefix first, then label prefix, then the rest. */
+export function rankItems(items, q) {
+  if (!q) return items;
+  const score = (it) => {
+    const cmd = (it.cmd || '').toLowerCase();
+    const label = it.label.toLowerCase();
+    if (cmd.startsWith(q) || cmd.startsWith(`/${q}`)) return 0;
+    if (label.startsWith(q)) return 1;
+    return 2;
+  };
+  return [...items].sort((a, b) => score(a) - score(b));
+}

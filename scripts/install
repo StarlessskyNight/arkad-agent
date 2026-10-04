@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_URL="${ARKAD_REPO_URL:-https://github.com/PrajsRamteke/arkad-agent.git}"
+BRANCH="${ARKAD_BRANCH:-main}"
+INSTALL_DIR="${ARKAD_INSTALL_DIR:-${HOME}/.local/share/arkad-agent}"
+
+need_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "error: missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+python_ok() {
+  "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
+
+choose_python() {
+  if [ -n "${PYTHON:-}" ]; then
+    if command -v "${PYTHON}" >/dev/null 2>&1 && python_ok "${PYTHON}"; then
+      echo "${PYTHON}"
+      return
+    fi
+    echo "error: PYTHON=${PYTHON} is not Python 3.10 or newer" >&2
+    exit 1
+  fi
+
+  for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+    if command -v "${candidate}" >/dev/null 2>&1 && python_ok "${candidate}"; then
+      echo "${candidate}"
+      return
+    fi
+  done
+
+  # brew install python@3.11 does not always put Homebrew on PATH in the current shell
+  if [ "$(uname -s)" = "Darwin" ]; then
+    for candidate in \
+      /opt/homebrew/bin/python3.14 /opt/homebrew/bin/python3.13 \
+      /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 \
+      /opt/homebrew/bin/python3.10 \
+      /usr/local/bin/python3.14 /usr/local/bin/python3.13 \
+      /usr/local/bin/python3.12 /usr/local/bin/python3.11 \
+      /usr/local/bin/python3.10; do
+      if [ -x "${candidate}" ] && python_ok "${candidate}"; then
+        echo "${candidate}"
+        return
+      fi
+    done
+  fi
+
+  echo "error: Arkad requires Python 3.10 or newer" >&2
+  echo "install one, for example: brew install python@3.11" >&2
+  exit 1
+}
+
+path_has() {
+  case ":${PATH}:" in
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+choose_bin_dir() {
+  if [ -n "${ARKAD_BIN_DIR:-}" ]; then
+    echo "${ARKAD_BIN_DIR}"
+    return
+  fi
+
+  for dir in "${HOME}/.local/bin" "/opt/homebrew/bin" "/usr/local/bin"; do
+    if path_has "${dir}" && { [ -w "${dir}" ] || { [ ! -e "${dir}" ] && [ -w "$(dirname "${dir}")" ]; }; }; then
+      echo "${dir}"
+      return
+    fi
+  done
+
+  echo "${HOME}/.local/bin"
+}
+
+append_path_to_profile() {
+  local profile="$1"
+  local dir="$2"
+  local line="export PATH=\"${dir}:\$PATH\""
+
+  touch "${profile}"
+  if grep -F "${line}" "${profile}" >/dev/null 2>&1; then
+    return
+  fi
+  {
+    echo
+    echo "# Arkad command"
+    echo "${line}"
+  } >> "${profile}"
+}
+
+ensure_path_in_profile() {
+  local dir="$1"
+  if path_has "${dir}"; then
+    return
+  fi
+
+  local profiles=()
+  case "$(basename "${SHELL:-}")" in
+    zsh)
+      profiles=("${HOME}/.zshrc")
+      # macOS Terminal/iTerm often use login shells that read .zprofile.
+      if [ "$(uname -s)" = "Darwin" ]; then
+        profiles+=("${HOME}/.zprofile")
+      fi
+      ;;
+    bash)
+      if [ -f "${HOME}/.bashrc" ]; then
+        profiles=("${HOME}/.bashrc")
+      elif [ -f "${HOME}/.bash_profile" ]; then
+        profiles=("${HOME}/.bash_profile")
+      else
+        profiles=("${HOME}/.bashrc")
+      fi
+      ;;
+    *) profiles=("${HOME}/.profile") ;;
+  esac
+
+  for profile in "${profiles[@]}"; do
+    append_path_to_profile "${profile}" "${dir}"
+  done
+}
+
+verify_install() {
+  ".venv/bin/python" - <<'PY'
+import importlib
+import sys
+
+required = ("anthropic", "openai", "httpx", "rich", "textual", "mcp")
+missing = []
+for name in required:
+    try:
+        importlib.import_module(name)
+    except ImportError:
+        missing.append(name)
+
+if missing:
+    print("missing packages: " + ", ".join(missing), file=sys.stderr)
+    raise SystemExit(1)
+
+# Import the app itself so a dependency it imports directly but pip didn't
+# install fails here, not on the user's first `arkad`.
+for name in ("arkad.tui.app", "arkad.main"):
+    try:
+        importlib.import_module(name)
+    except Exception as e:
+        print(f"arkad failed to import ({name}): {type(e).__name__}: {e}", file=sys.stderr)
+        raise SystemExit(1)
+PY
+}
+
+need_cmd git
+PYTHON="$(choose_python)"
+
+BIN_DIR="$(choose_bin_dir)"
+LINK="${BIN_DIR}/arkad-agent"
+
+if [ -d "${INSTALL_DIR}/.git" ]; then
+  echo "updating ${INSTALL_DIR}"
+  git -C "${INSTALL_DIR}" fetch origin "${BRANCH}"
+  git -C "${INSTALL_DIR}" checkout "${BRANCH}"
+  git -C "${INSTALL_DIR}" pull --ff-only origin "${BRANCH}"
+elif [ -e "${INSTALL_DIR}" ]; then
+  echo "error: ${INSTALL_DIR} exists but is not a git checkout" >&2
+  echo "set ARKAD_INSTALL_DIR to another path or move that folder first" >&2
+  exit 1
+else
+  echo "cloning ${REPO_URL} -> ${INSTALL_DIR}"
+  mkdir -p "$(dirname "${INSTALL_DIR}")"
+  git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${INSTALL_DIR}"
+fi
+
+cd "${INSTALL_DIR}"
+
+if [ -x ".venv/bin/python" ] && ! python_ok ".venv/bin/python"; then
+  echo "recreating .venv because it uses Python older than 3.10"
+  rm -rf .venv
+fi
+
+if [ ! -d ".venv" ]; then
+  "${PYTHON}" -m venv --upgrade-deps .venv
+fi
+
+".venv/bin/python" -m pip install --upgrade pip setuptools wheel
+".venv/bin/python" -m pip install -e .
+
+echo "verifying Python packages..."
+if ! verify_install; then
+  echo "retrying with requirements.txt..."
+  ".venv/bin/python" -m pip install -r requirements.txt
+  verify_install
+fi
+
+mkdir -p "${BIN_DIR}"
+
+if [ -e "${LINK}" ] && [ ! -L "${LINK}" ]; then
+  echo "error: ${LINK} already exists and is not a symlink" >&2
+  echo "move it first, then rerun this installer" >&2
+  exit 1
+fi
+
+ln -sfn "${INSTALL_DIR}/.venv/bin/arkad-agent" "${LINK}"
+
+echo
+echo "Arkad installed."
+echo "Command: ${LINK}"
+
+case ":${PATH}:" in
+  *":${BIN_DIR}:"*)
+    echo "Run from any project folder: arkad"
+    ;;
+  *)
+    echo
+    ensure_path_in_profile "${BIN_DIR}"
+    echo "Added ${BIN_DIR} to your shell profile."
+    case "$(basename "${SHELL:-}")" in
+      zsh) echo "Reload your shell: source ~/.zshrc" ;;
+      bash) echo "Reload your shell: source ~/.bashrc" ;;
+      *) echo "Reload your shell profile, or open a new terminal." ;;
+    esac
+    echo "Then run: arkad"
+    echo "For this terminal only, run: export PATH=\"${BIN_DIR}:\$PATH\""
+    ;;
+esac

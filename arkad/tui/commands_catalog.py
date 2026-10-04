@@ -1,0 +1,124 @@
+"""Flat list of slash commands shown in the TUI palette.
+
+Repeated subcommand groups (``/memory add``, ``/lesson search``,
+``/settings set``, …) have been folded into modal-opening entries so the
+palette stays scannable. The full subcommand surface is still reachable by
+typing the command directly — see each modal for the in-modal key bindings.
+"""
+
+COMMANDS = [
+    # Session
+    ("/help", "open the help reference (type to search)"),
+    ("/new", "start a fresh conversation (keeps pinned context)"),
+    ("/reset", "clear conversation"),
+    ("/history", "show message summary"),
+    ("/export ", "export conversation as markdown"),
+    ("/session", "open the session modal (resume / delete handled inside)"),
+    ("/clear", "clear the terminal screen"),
+    ("/loop", "repeat a task — /loop <task> (self-paced) · /loop 5m <task> · /loop stop"),
+    ("/exit", "quit"),
+    # Context
+    ("/pin", "pinned context — view · append · /pin on|off|toggle · clear via /unpin"),
+    ("/unpin", "clear pinned context"),
+    # Memory — modal handles list / add / delete / clear
+    ("/memory", "open the memory modal (list · add · delete · clear)"),
+    # Lessons — modal handles list / search / add / delete / clear
+    ("/lesson", "open the lesson modal (list · search · add · delete · clear)"),
+    # Skills — modal browses; LLM auto-invokes by description
+    ("/skill", "open the skill browser — install from a link, remove, move project ↔ global"),
+    ("/skill add ", "install a skill: GitHub link · owner/repo · SKILL.md link · folder  [--project|--global]"),
+    # Local commands — shell/file/git that run without LLM
+    ("/local", "open the local commands modal (pick and run ls, pwd, cd, git, find, run, undo, diff)"),
+    # Clipboard
+    ("/copy", "copy last reply — ⌃Y · 'code' = last code block · 'all' = whole chat"),
+    ("/paste", "send clipboard text / OCR clipboard image"),
+    # Agents — modal handles browse · activate · new · edit · global · scope
+    ("/agent", "open the agent control modal"),
+    ("/agent init", "scaffold a .arkad/ tree in the current project"),
+    # Custom commands — user-defined prompt templates triggered as /<name>
+    ("/command", "open the command manager modal (new · edit · delete · import/export · global)"),
+    # Theme — modal handles the picker
+    ("/theme", "open the theme picker (live preview)"),
+    # Scan
+    ("/scan", "AI-powered deep scan: identity / docs / projects → memory"),
+    # MCP — single modal for everything
+    ("/mcp", "MCP control panel — add, connect, sign in, keys, scope"),
+    ("/mcp add ", "add a server: https://… · npx … · claude mcp add … · JSON · GitHub link · name  [--project|--global]"),
+    ("/mcp auth ", "sign in to a hosted MCP server (opens the browser)"),
+    ("/mcp key ", "enter the API key / token an MCP server needs (hidden)"),
+    # Settings — modal handles get · set · reset · reload · edit · path
+    ("/settings", "open the settings modal (view · edit · reset · reload)"),
+    # Upgrade
+    ("/upgrade", "update Arkad to the latest version (use 'check' to dry-run)"),
+    # Version
+    ("/version", "show Arkad version"),
+    # Control
+    ("/think", "toggle extended thinking (bare /think) — or open effort picker"),
+    ("/verbose", "toggle trace — thinking + tool output previews (⌃T)"),
+    ("/sidebar", "toggle the session sidebar (⌃B)"),
+    ("/web", "open this session in a browser — QR + link (starts the web remote)"),
+    ("/web open", "open this session in this computer's browser (starts the web remote)"),
+    ("/web anywhere", "public HTTPS link — use Arkad from any network (Cloudflare / ngrok tunnel)"),
+    ("/web hide", "hide the corner QR code (/web show brings it back)"),
+    ("/web stop", "stop the web remote"),
+    ("/auto", "toggle auto-approve bash"),
+    ("/plan", "toggle plan mode — read-only research until you approve a plan"),
+    ("/model", "open model picker (Arkad Agent free models listed first)"),
+    ("/stats", "session stats"),
+    ("/provider", "one command for everything — OAuth login, API keys, provider switch"),
+]
+
+
+# Built-ins that still run when typed but aren't listed in the palette, /help
+# or the web menu. Custom commands can't use these names — dispatch would run
+# the built-in instead.
+UNLISTED_BUILTINS = frozenset({
+    "search", "save", "load", "keytest", "note", "notes",
+    "alias", "aliases", "multi", "mode", "tokens", "cost",
+})
+
+
+def _custom_command_entries():
+    """User-defined commands from .arkad/commands/ (and global dirs).
+
+    Listed after the built-ins so the palette stays predictable. Failures
+    (e.g. during early startup) silently yield no extra entries.
+    """
+    try:
+        from ..storage.commands import list_commands
+        builtin_heads = {c.split()[0] for c, _ in COMMANDS}
+        builtin_heads |= {f"/{name}" for name in UNLISTED_BUILTINS}
+        entries = []
+        for rec in list_commands():
+            if f"/{rec['name']}" in builtin_heads:
+                # built-ins always win in dispatch — don't advertise the shadowed file
+                continue
+            hint = f" {rec['argument_hint']}" if rec.get("argument_hint") else ""
+            tag = "global" if rec.get("scope") == "global" else "project"
+            entries.append((
+                f"/{rec['name']} ",
+                f"⌘ custom ({tag}){hint} — {rec.get('description') or 'user-defined prompt'}",
+            ))
+        return entries
+    except Exception:
+        return []
+
+
+
+def _with_toggles(catalog: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for entry in catalog:
+        out.append(entry)
+    return out
+
+
+def filter_commands(query: str):
+    """Return commands whose cmd or description matches the query substring."""
+    catalog = _with_toggles(COMMANDS) + _custom_command_entries()
+    q = query.strip().lower()
+    if not q or q == "/":
+        return catalog
+    return [
+        (c, d) for (c, d) in catalog
+        if q in c.lower() or q in d.lower()
+    ]

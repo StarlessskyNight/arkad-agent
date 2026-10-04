@@ -1,0 +1,767 @@
+"""HTTP request handler for Arkad web remote (API + static assets)."""
+from __future__ import annotations
+
+import hmac
+import ipaddress
+import json
+import mimetypes
+import queue
+import re
+import urllib.parse
+from http.server import BaseHTTPRequestHandler
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from .bridge import CLOSE_SENTINEL, WebBridge
+from .pickers_api import (
+    get_skill,
+    list_agents,
+    list_mcp_servers,
+    list_models,
+    list_sessions,
+    list_skills,
+)
+from .state_api import snapshot_from_state, state_fields
+
+if TYPE_CHECKING:
+    from ..tui.app import ArkadTUI
+
+_STATIC_DIR = Path(__file__).with_name("static")
+_HEARTBEAT_SECS = 8.0
+_POLL_WAIT_SECS = 20.0
+_PING = b'data: {"type": "ping", "data": {}, "ts": 0}\n\n'
+_INDEX_PATH = _STATIC_DIR / "index.html"
+
+_MIME = {
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".woff2": "font/woff2",
+}
+
+
+def _normalize_answers(result: dict[str, Any]) -> dict[str, Any]:
+    """Accept ``selected`` (older web clients) as ``selected_ids``.
+
+    ``ask_user_question`` consumers (plan approval, the tool result) read
+    ``selected_ids`` / ``labels`` — the same shape the TUI askbar returns.
+    """
+    answers = []
+    for ans in result.get("answers") or []:
+        if not isinstance(ans, dict):
+            continue
+        ans = dict(ans)
+        if "selected_ids" not in ans and isinstance(ans.get("selected"), list):
+            ans["selected_ids"] = ans.pop("selected")
+        ans.setdefault("selected_ids", [])
+        ans.setdefault("labels", [])
+        answers.append(ans)
+    out = dict(result)
+    out["answers"] = answers
+    return out
+
+
+class WebHandler(BaseHTTPRequestHandler):
+    bridge: WebBridge
+    app: ArkadTUI | None = None
+
+    def log_message(self, *_args: Any) -> None:
+        return
+
+    def _authorized(self) -> bool:
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            return self._token_ok(auth[7:].strip())
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        token = (qs.get("token") or [""])[0]
+        return self._token_ok(token)
+
+    # Headers a reverse proxy / tunnel adds. Their presence means the request
+    # did not come straight from a browser on this network.
+    _PROXY_HEADERS = (
+        "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded",
+        "X-Real-IP", "Cf-Connecting-Ip", "Cf-Ray", "Cdn-Loop", "Ngrok-Trace-Id",
+    )
+
+    def _may_hand_out_token(self) -> bool:
+        """Only a direct visit from this computer or the LAN gets the token.
+
+        A tunnel (cloudflared / ngrok) connects from 127.0.0.1 too, so the
+        client address alone can't tell — proxy headers and the tunnel's
+        public Host can.
+        """
+        for name in self._PROXY_HEADERS:
+            if self.headers.get(name):
+                return False
+        host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        public_host = (getattr(self.bridge, "public_host", "") or "").lower()
+        if public_host and host == public_host:
+            return False
+        if host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok.app", ".ngrok.io", ".ngrok.dev")):
+            return False
+        try:
+            ip = ipaddress.ip_address((self.client_address or ("",))[0])
+        except ValueError:
+            return False
+        return ip.is_loopback or ip.is_private or ip.is_link_local
+
+    def _token_ok(self, token: str) -> bool:
+        return hmac.compare_digest(token.encode("utf-8"), self.bridge.token.encode("utf-8"))
+
+    def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        # Assets change with every upgrade and are tiny — always revalidate.
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_json(self, status: int, payload: dict[str, Any], *, close: bool = False) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        if not close:
+            self._send_bytes(status, body, "application/json; charset=utf-8")
+            return
+        # Answering before the request body was read: the socket can't be reused.
+        self.close_connection = True
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _busy(self) -> bool:
+        return bool(getattr(self.app, "_busy", False)) if self.app else False
+
+    def _snapshot(self) -> dict[str, Any]:
+        snap = snapshot_from_state(busy=self._busy())
+        # LAN link (with token) so "Copy link" works on other devices too.
+        snap["remote_url"] = str(
+            getattr(self.app, "_web_public_link", "")
+            or getattr(self.app, "_web_primary_url", "")
+            or ""
+        )
+        return snap
+
+    def _parse_query(self) -> tuple[str, dict[str, list[str]]]:
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        qs = urllib.parse.parse_qs(parsed.query)
+        return path, qs
+
+    def _query_str(self, qs: dict[str, list[str]], key: str, default: str = "") -> str:
+        return (qs.get(key) or [default])[0]
+
+    def _query_int(self, qs: dict[str, list[str]], key: str, default: int) -> int:
+        try:
+            return int(self._query_str(qs, key, str(default)) or default)
+        except ValueError:
+            return default
+
+    def _serve_index(self) -> None:
+        if not _INDEX_PATH.is_file():
+            self._send_json(500, {"error": "index.html missing"})
+            return
+        self._send_bytes(200, _INDEX_PATH.read_bytes(), "text/html; charset=utf-8")
+
+    def _serve_static(self, path: str) -> None:
+        if not path.startswith("/static/"):
+            self.send_response(404)
+            self.end_headers()
+            return
+        rel = path[len("/static/"):]
+        if ".." in rel or rel.startswith("/"):
+            self.send_response(403)
+            self.end_headers()
+            return
+        file_path = (_STATIC_DIR / rel).resolve()
+        if not str(file_path).startswith(str(_STATIC_DIR.resolve())):
+            self.send_response(403)
+            self.end_headers()
+            return
+        if not file_path.is_file():
+            self.send_response(404)
+            self.end_headers()
+            return
+        ext = file_path.suffix.lower()
+        mime = _MIME.get(ext) or mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        self._send_bytes(200, file_path.read_bytes(), mime)
+
+    # ─── Media: uploads from the page, files served back by id ───────────
+    _UPLOAD_READ_TIMEOUT = 60.0  # a phone that drops mid-upload must not pin a thread
+
+    def _handle_upload(self) -> None:
+        """``POST /api/upload`` — raw file body; name in ``X-File-Name`` (URL-encoded)."""
+        from .. import media
+
+        raw_len = self.headers.get("Content-Length")
+        if raw_len is None:
+            self._send_json(411, {"ok": False, "code": "length_required",
+                                  "error": "The upload had no size. Try again."}, close=True)
+            return
+        try:
+            length = int(raw_len)
+        except ValueError:
+            self._send_json(400, {"ok": False, "code": "bad_length", "error": "The upload had an invalid size."}, close=True)
+            return
+        name = urllib.parse.unquote(self.headers.get("X-File-Name") or "")
+        ctype = self.headers.get("Content-Type") or ""
+        previous = self.connection.gettimeout()
+        try:
+            self.connection.settimeout(self._UPLOAD_READ_TIMEOUT)
+            record = media.save_upload(self.rfile, length, name, ctype)
+        except media.UploadError as exc:
+            # Refused before the body was read (too large / empty): close the socket.
+            unread = exc.code in ("too_large", "empty", "interrupted")
+            self._send_json(exc.status, {"ok": False, "code": exc.code, "error": str(exc)}, close=unread)
+            return
+        except Exception as exc:  # never leave the page waiting on a 500 with no body
+            self._send_json(500, {"ok": False, "code": "failed",
+                                  "error": f"The upload failed on the computer ({type(exc).__name__})."}, close=True)
+            return
+        finally:
+            try:
+                self.connection.settimeout(previous)
+            except OSError:
+                pass
+        self._send_json(200, {"ok": True, "file": record})
+
+    def _serve_media(self, uid: str, qs: dict[str, list[str]]) -> None:
+        """``GET /api/media/<id>[?v=thumb|view][&dl=1]`` — byte ranges for video seeking."""
+        from .. import media
+
+        try:
+            found = media.media_file(uid, self._query_str(qs, "v"))
+        except Exception:
+            found = None
+        if found is None:
+            self._send_json(404, {"error": "This file is no longer on the computer."})
+            return
+        path, mime, name = found
+        try:
+            size = path.stat().st_size
+            fh = open(path, "rb")
+        except OSError:
+            self._send_json(404, {"error": "This file is no longer on the computer."})
+            return
+        with fh:
+            start, end, status = 0, size - 1, 200
+            rng = (self.headers.get("Range") or "").strip()
+            m = re.fullmatch(r"bytes=(\d*)-(\d*)", rng) if rng else None
+            if m and (m.group(1) or m.group(2)) and size:
+                if m.group(1):
+                    start = int(m.group(1))
+                    end = min(int(m.group(2)), size - 1) if m.group(2) else size - 1
+                else:  # suffix range: the last N bytes
+                    start = max(0, size - int(m.group(2)))
+                if start > end or start >= size:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                status = 206
+            length = end - start + 1 if size else 0
+            disposition = "attachment" if self._query_str(qs, "dl") == "1" else "inline"
+            ascii_name = re.sub(r'[^\x20-\x7e]|["\\]', "_", name) or "file"
+            self.send_response(status)
+            self.send_header("Content-Type", mime or "application/octet-stream")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Accept-Ranges", "bytes")
+            if status == 206:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Disposition",
+                             f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{urllib.parse.quote(name)}")
+            # Ids never point at different bytes, so the browser may keep them.
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            # Uploaded files are shown, never run (an SVG or HTML can't script this page).
+            # Chrome won't render PDFs in a sandbox, and its viewer is isolated anyway.
+            csp = "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'"
+            if not mime.startswith("application/pdf"):
+                csp += "; sandbox"
+            self.send_header("Content-Security-Policy", csp)
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            fh.seek(start)
+            remaining = length
+            try:
+                while remaining > 0:
+                    chunk = fh.read(min(1 << 16, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass  # the viewer closed or seeked elsewhere
+
+    def _stream_events(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        # no-transform: a tunnel / CDN (Cloudflare) must not compress or buffer
+        # the stream — events have to reach the browser as they happen.
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        snap = self._snapshot()
+        sub = self.bridge.subscribe()
+        try:
+            # Read after subscribing: a prompt asked from here on is on the
+            # queue, one asked before is in this list — none falls in between.
+            snap["prompts"] = self.bridge.pending_events()
+            hello = json.dumps({"type": "snapshot", "data": snap, "ts": 0}, ensure_ascii=False)
+            self.wfile.write(f"data: {hello}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            while True:
+                try:
+                    line = sub.get(timeout=_HEARTBEAT_SECS)
+                except queue.Empty:
+                    # A real event, not an SSE comment: the page watches for
+                    # silence to spot connections that died without an error
+                    # (laptop sleep, phone lock, Wi-Fi switch) and reconnects.
+                    self.wfile.write(_PING)
+                    self.wfile.flush()
+                    continue
+                if line == CLOSE_SENTINEL:
+                    break
+                self.wfile.write(f"data: {line}\n\n".encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            self.bridge.unsubscribe(sub)
+
+    def _poll_events(self, qs: dict[str, list[str]]) -> None:
+        """Long-poll transport — for tunnels that hold SSE back until it ends.
+
+        No ``cursor``: the snapshot (with the pending prompts) and the cursor
+        to continue from. With ``cursor``: events after it, waiting up to 20 s.
+        """
+        client_id = self._query_str(qs, "cid")[:64]
+        raw = self._query_str(qs, "cursor").strip()
+        if not raw:
+            self.bridge.touch_poller(client_id)
+            snap = self._snapshot()
+            cursor = self.bridge.latest_seq()
+            # After the cursor, like the SSE stream's subscribe.
+            snap["prompts"] = self.bridge.pending_events()
+            events = [{"type": "snapshot", "data": snap, "ts": 0}]
+            body = json.dumps({"cursor": cursor, "events": events}, ensure_ascii=False)
+        else:
+            try:
+                cursor = int(raw)
+            except ValueError:
+                cursor = -1
+            body = self.bridge.poll(cursor, timeout=_POLL_WAIT_SECS, client_id=client_id)
+        data = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store, no-transform")
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _handle_api_get(self, path: str, qs: dict[str, list[str]]) -> None:
+        if path == "/api/sessions":
+            limit = self._query_int(qs, "limit", 50)
+            offset = self._query_int(qs, "offset", 0)
+            self._send_json(200, list_sessions(limit=limit, offset=offset))
+            return
+        if path == "/api/models":
+            self._send_json(200, list_models(query=self._query_str(qs, "q")))
+            return
+        if path == "/api/agents":
+            raw = self._query_str(qs, "include_global", "")
+            include = None if raw == "" else raw.lower() in ("1", "true", "yes")
+            self._send_json(200, list_agents(include_global=include))
+            return
+        if path == "/api/skills":
+            raw = self._query_str(qs, "include_global", "")
+            include = None if raw == "" else raw.lower() in ("1", "true", "yes")
+            self._send_json(200, list_skills(include_global=include, query=self._query_str(qs, "q")))
+            return
+        if path.startswith("/api/skills/") and path != "/api/skills":
+            name = urllib.parse.unquote(path[len("/api/skills/"):])
+            payload = get_skill(name)
+            if payload is None:
+                self._send_json(404, {"error": "skill not found"})
+                return
+            self._send_json(200, payload)
+            return
+        if path == "/api/mcp":
+            self._send_json(200, list_mcp_servers(query=self._query_str(qs, "q")))
+            return
+        if path == "/api/commands":
+            from .commands_api import list_commands as list_custom_commands
+
+            self._send_json(200, list_custom_commands())
+            return
+        if path == "/api/mcp/auth":
+            from .extensions_api import mcp_auth_status
+
+            self._send_json(200, mcp_auth_status(self._query_str(qs, "name")))
+            return
+        if path == "/api/qr":
+            # QR for the link the page would copy. The page may pass the link
+            # it is showing (``url``); otherwise the server's own remote link.
+            from .qr_ascii import qr_svg
+
+            url = self._query_str(qs, "url") or self._snapshot().get("remote_url", "")
+            if not url.startswith(("http://", "https://")) or len(url) > 2000:
+                self._send_json(404, {"error": "no shareable link"})
+                return
+            self._send_bytes(200, qr_svg(url).encode("utf-8"), "image/svg+xml")
+            return
+        if path == "/api/tool-output":
+            from .state_api import tool_output_text
+
+            found = tool_output_text(self._query_str(qs, "id"))
+            if found is None:
+                self._send_json(404, {"error": "no full output for this tool call"})
+            else:
+                self._send_json(200, found)
+            return
+        if path == "/api/changes":
+            from .. import file_changes
+
+            self._send_json(200, file_changes.summaries())
+            return
+        if path == "/api/changes/file":
+            from .. import file_changes
+
+            found = file_changes.detail(self._query_str(qs, "id"))
+            if found is None:
+                self._send_json(404, {"error": "file has no changes"})
+            else:
+                self._send_json(200, found)
+            return
+        if path == "/api/changes/patch":
+            from .. import file_changes
+
+            fid = self._query_str(qs, "id") or None
+            self._send_json(200, {"patch": file_changes.patch_text(fid)})
+            return
+        if path == "/api/pin":
+            from ..storage import pin as pin_store
+
+            self._send_json(200, pin_store.public())
+            return
+        if path == "/api/providers":
+            from .providers_api import list_providers
+
+            self._send_json(200, list_providers())
+            return
+        if path == "/api/providers/oauth":
+            from .providers_api import oauth_status
+
+            self._send_json(200, oauth_status(self._query_str(qs, "flow")))
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def _handle_providers_post(self, path: str, data: dict[str, Any]) -> None:
+        """Keys, sign-in and switching (``providers_api``). Network calls run
+        here; session changes hop to the TUI main thread via the bridge."""
+        from . import providers_api as pv
+
+        run = pv.bridge_runner(self.bridge)
+        card_id = str(data.get("id") or "").strip()
+        flow_id = str(data.get("flow") or "").strip()
+        if path == "/api/providers/key":
+            result = pv.save_key(card_id, str(data.get("key") or ""), use=bool(data.get("use", True)), run_action=run)
+        elif path == "/api/providers/key/remove":
+            result = run("provider_key_remove", {"id": card_id})
+        elif path == "/api/providers/use":
+            result = run("provider_use", {"id": card_id})
+        elif path == "/api/providers/signout":
+            result = run("provider_sign_out", {"id": card_id})
+        elif path == "/api/providers/oauth/start":
+            result = pv.start_oauth(card_id, run_action=run)
+        elif path == "/api/providers/oauth/finish":
+            result = pv.finish_oauth(flow_id, str(data.get("code") or ""), run_action=run)
+        elif path == "/api/providers/oauth/cancel":
+            result = pv.cancel_oauth(flow_id)
+        else:
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = dict(result) if isinstance(result, dict) else {"ok": False, "error": "invalid response"}
+        try:
+            body["providers"] = pv.list_providers()
+            fields = state_fields(busy=self._busy())
+            body["state"] = fields
+        except Exception:
+            fields = None
+        if body.get("ok") and fields is not None and path not in (
+            "/api/providers/oauth/start", "/api/providers/oauth/cancel",
+        ):
+            # Other open tabs see the new model / provider now, not on the
+            # next watcher tick (the provider list event comes from ``run``).
+            self.bridge.emit("state", fields)
+        self._send_json(200, body)
+
+    def _handle_extensions_post(self, path: str, data: dict[str, Any]) -> None:
+        """Add / sign in to / remove skills and MCP servers (``extensions_api``)."""
+        from . import extensions_api as ext
+
+        dry_run = path in ("/api/mcp/parse", "/api/skills/inspect")  # reads only: no fresh list, no event
+        try:
+            if path.startswith("/api/skills/"):
+                result = ext.run_skills(path, data)
+                fresh = {} if dry_run else {"skills": ext.skills_state()}
+                changed = "skills"
+            else:
+                result = ext.run_mcp(path, data)
+                fresh = {} if dry_run else {"mcp": ext.mcp_state()}
+                changed = "mcp"
+        except Exception as exc:  # never leave the page hanging on a 500
+            self._send_json(200, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        body = dict(result) if isinstance(result, dict) else {"ok": False, "error": "invalid response"}
+        body.update(fresh)
+        body.update(ext.scope_flags())
+        if not dry_run:
+            # Other open pages reload their lists now.
+            self.bridge.emit(changed, {"event": path.rsplit("/", 1)[-1], "name": str(data.get("name") or "")})
+        self._send_json(200, body)
+
+    def _handle_commands_post(self, path: str, data: dict[str, Any]) -> None:
+        """Create / edit / delete / copy custom slash commands (``commands_api``)."""
+        from . import commands_api
+
+        try:
+            result = commands_api.run(path, data)
+        except Exception as exc:  # never leave the page hanging on a 500
+            self._send_json(200, {"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        body = dict(result) if isinstance(result, dict) else {"ok": False, "error": "invalid response"}
+        body["list"] = commands_api.list_commands()
+        if body.get("ok"):
+            # Other open pages reload their slash menu and dialog now.
+            self.bridge.emit("commands", {"event": path.rsplit("/", 1)[-1], "name": str(body.get("name") or "")})
+        self._send_json(200, body)
+
+    def _handle_prompt(self, data: dict[str, Any]) -> None:
+        """``POST /api/prompt`` ``{text, attachments?: [upload ids]}``."""
+        from .. import media
+
+        text = str(data.get("text") or "").strip()
+        wanted = data.get("attachments") or []
+        if not text and not wanted:
+            self._send_json(400, {"error": "empty prompt"})
+            return
+        files: list[dict[str, Any]] = []
+        if wanted:
+            if text.startswith(("/", "!")):
+                self._send_json(400, {"ok": False, "code": "command_with_files",
+                                      "error": "Commands can’t carry attachments. Remove the files, or write a message."})
+                return
+            try:
+                files = media.resolve(wanted)
+            except media.UploadError as exc:
+                self._send_json(exc.status, {"ok": False, "code": exc.code, "error": str(exc)})
+                return
+        ok = self.bridge.submit_prompt(text, [m["id"] for m in files])
+        if ok and files:
+            media.mark_sent(files)
+        self._send_json(200 if ok else 503, {"ok": ok})
+
+    def _handle_api_post(self, path: str, data: dict[str, Any]) -> None:
+        if path.startswith("/api/providers/"):
+            self._handle_providers_post(path, data)
+            return
+
+        from .extensions_api import handles as _ext_handles
+
+        if _ext_handles(path):
+            self._handle_extensions_post(path, data)
+            return
+
+        from .commands_api import handles as _commands_handles
+
+        if _commands_handles(path):
+            self._handle_commands_post(path, data)
+            return
+
+        if path == "/api/action":
+            action = str(data.get("action") or "").strip()
+            if not action:
+                self._send_json(400, {"ok": False, "error": "missing action"})
+                return
+            payload = data.get("data")
+            if not isinstance(payload, dict):
+                payload = {k: v for k, v in data.items() if k != "action"}
+            result = self.bridge.request_action(action, payload)
+            if not isinstance(result, dict):
+                result = {"ok": False, "error": "invalid action response"}
+            body = dict(result)
+            try:
+                body["state"] = self._snapshot()
+            except Exception as exc:
+                body["state"] = {}
+                if body.get("ok"):
+                    body["snapshot_error"] = str(exc)
+            if body.get("ok") and body.get("state"):
+                self.bridge.emit("snapshot", body["state"])
+            return self._send_json(200, body)
+
+        if path == "/api/prompt":
+            self._handle_prompt(data)
+            return
+
+        if path == "/api/pin":
+            # Pinned context: runs on the terminal's thread; every page refreshes.
+            result = self.bridge.request_action("pin", data)
+            if not isinstance(result, dict):
+                result = {"ok": False, "error": "invalid response"}
+            if result.get("pin") is not None:
+                self.bridge.emit("pin", result["pin"])
+            self._send_json(200, result)
+            return
+
+        if path == "/api/queue":
+            # Edit / remove / "send now" a queued message (``prompt_queue.apply_op``).
+            result = self.bridge.request_action("queue", data)
+            if not isinstance(result, dict):
+                result = {"ok": False, "error": "invalid response"}
+            from .. import prompt_queue
+
+            body = {**result, "items": prompt_queue.labels(), "entries": prompt_queue.public()}
+            self.bridge.emit("queue", {"items": body["items"], "entries": body["entries"]})
+            self._send_json(200, body)
+            return
+
+        if path == "/api/upload/remove":
+            from .. import media
+
+            self._send_json(200, {"ok": media.remove(str(data.get("id") or ""))})
+            return
+
+        if path == "/api/cancel":
+            ok = self.bridge.cancel_turn()
+            self._send_json(200, {"ok": ok})
+            return
+
+        if path == "/api/enhance":
+            # Side request on this handler thread — nothing joins the chat.
+            from ..prompt_enhance import EnhanceError, enhance_prompt
+
+            try:
+                result = enhance_prompt(str(data.get("text") or ""))
+            except EnhanceError as exc:
+                self._send_json(200, {"ok": False, "error": str(exc)})
+                return
+            self._send_json(200, {"ok": True, "text": result.text, "changed": result.changed})
+            return
+
+        if path == "/api/respond":
+            prompt_id = str(data.get("id") or "").strip()
+            if not prompt_id:
+                self._send_json(400, {"error": "missing id"})
+                return
+            result = data.get("result")
+            if isinstance(result, dict) and "answers" in result:
+                payload = json.dumps(_normalize_answers(result), ensure_ascii=False)
+            elif result is None:
+                payload = "n"
+            else:
+                payload = str(result)
+            ok = self.bridge.resolve_prompt(prompt_id, payload)
+            self._send_json(200 if ok else 404, {"ok": ok})
+            return
+
+        if path == "/api/settings":
+            updated = self.bridge.request_settings(data)
+            if updated:
+                self.bridge.emit("settings", updated)
+            self._send_json(200, {"ok": True, "settings": self._snapshot()})
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_GET(self) -> None:  # noqa: N802
+        path, qs = self._parse_query()
+
+        if path.startswith("/static/"):
+            self._serve_static(path)
+            return
+
+        if path == "/":
+            if not self._authorized():
+                if self._may_hand_out_token():
+                    # Same network: redirect so the local QR can omit the token.
+                    self.send_response(302)
+                    self.send_header("Location", f"/?token={self.bridge.token}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                # Through a tunnel / from outside: the page shows "open the
+                # link from your terminal" — it never learns the token.
+            self._serve_index()
+            return
+
+        if not self._authorized():
+            self._send_json(401, {"error": "unauthorized"})
+            return
+
+        if path == "/api/events":
+            self._stream_events()
+            return
+
+        if path == "/api/poll":
+            self._poll_events(qs)
+            return
+
+        if path == "/api/state":
+            self._send_json(200, self._snapshot())
+            return
+
+        if path.startswith("/api/media/"):
+            self._serve_media(path[len("/api/media/"):], qs)
+            return
+
+        if path.startswith("/api/"):
+            self._handle_api_get(path, qs)
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self) -> None:  # noqa: N802
+        path, _qs = self._parse_query()
+
+        if not self._authorized():
+            self._send_json(401, {"error": "unauthorized"}, close=path == "/api/upload")
+            return
+
+        if path == "/api/upload":  # raw file body, not JSON
+            self._handle_upload()
+            return
+
+        data = self._read_json()
+
+        if path.startswith("/api/"):
+            self._handle_api_post(path, data)
+            return
+
+        self.send_response(404)
+        self.end_headers()

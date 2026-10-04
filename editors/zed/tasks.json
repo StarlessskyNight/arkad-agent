@@ -1,0 +1,14 @@
+[
+  {
+    "label": "Arkad: ask about selection",
+    "command": "arkad-agent",
+    "args": ["--prompt", "Explain this code:\n$ZED_SELECTED_TEXT"],
+    "use_new_terminal": true
+  },
+  {
+    "label": "Arkad: open current file",
+    "command": "arkad-agent",
+    "args": ["$ZED_FILE"],
+    "use_new_terminal": true
+  }
+]

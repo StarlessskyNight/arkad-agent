@@ -1,0 +1,68 @@
+import unittest
+from unittest import mock
+
+from arkad import state
+from arkad.constants import AUTH_API_KEY, AUTH_OAUTH, OAUTH_IDENTITY
+from arkad.constants.system_prompt import build_base_system
+from arkad.repl import system
+
+
+class SystemIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self._saved = {
+            "auth_mode": state.auth_mode,
+            "MODEL": state.MODEL,
+            "provider": state.provider,
+            "arkad_agent_free": state.arkad_agent_free,
+            "active_agent": state.active_agent,
+            "active_agent_name": state.active_agent_name,
+        }
+        system.invalidate_system_cache()
+
+    def tearDown(self):
+        for name, value in self._saved.items():
+            setattr(state, name, value)
+        system.invalidate_system_cache()
+
+    def test_base_prompt_identifies_as_arkad_not_claude_code(self):
+        prompt = build_base_system()
+        self.assertIn("Arkad", prompt)
+        self.assertIn("Arkad Agent", prompt)
+        self.assertIn("Never call yourself Claude Code", prompt)
+
+    def test_selected_model_block_includes_id_and_name(self):
+        state.MODEL = "claude-sonnet-5"
+        state.provider = "anthropic"
+        state.arkad_agent_free = False
+        state.auth_mode = AUTH_API_KEY
+        with mock.patch.object(system, "_build_static_body", return_value="BASE"):
+            prompt = system.build_system()
+        self.assertTrue(prompt.startswith("SELECTED MODEL: claude-sonnet-5"))
+        self.assertIn("MODEL NAME: Sonnet 5 — balanced", prompt)
+        self.assertIn("PROVIDER: Anthropic", prompt)
+
+    def test_oauth_prepends_wire_block_and_identity_override(self):
+        state.auth_mode = AUTH_OAUTH
+        state.MODEL = "claude-sonnet-5"
+        with mock.patch.object(system, "_build_static_body", return_value="BASE"):
+            blocks = system.build_system()
+        self.assertIsInstance(blocks, list)
+        self.assertEqual(blocks[0]["text"], OAUTH_IDENTITY)
+        self.assertIn("OAUTH WIRE BLOCK", blocks[1]["text"])
+        self.assertIn("Arkad (Arkad Agent)", blocks[1]["text"])
+        self.assertIn("SELECTED MODEL: claude-sonnet-5", blocks[1]["text"])
+        self.assertIn("MODEL NAME: Sonnet 5 — balanced", blocks[1]["text"])
+
+    def test_arkad_agent_free_provider_label(self):
+        state.arkad_agent_free = True
+        state.provider = "opencode_zen"
+        state.MODEL = "mimo-v2.5-free"
+        state.auth_mode = AUTH_API_KEY
+        # Free-tier models are registered from the live list (models.dev).
+        live = {"mimo-v2.5-free": ("MiMo V2.5 Free — 200K ctx, free", "opencode_zen", (0.0, 0.0))}
+        with mock.patch.object(system, "_build_static_body", return_value="BASE"), \
+                mock.patch.dict("arkad.constants.providers.MODEL_INFO", live):
+            prompt = system.build_system()
+        self.assertIn("SELECTED MODEL: mimo-v2.5-free", prompt)
+        self.assertIn("MODEL NAME: MiMo V2.5 Free — 200K ctx, free", prompt)
+        self.assertIn("PROVIDER: Arkad Agent (free)", prompt)

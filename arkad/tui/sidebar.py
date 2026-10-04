@@ -1,0 +1,357 @@
+"""Session sidebar (opencode-style) — shown on wide terminals, ⌃B toggles.
+
+Sections: session title, context/tokens (+cost when the model is priced),
+model & agent, MCP server health, and files modified this session — with
+Everything is read from ``state`` at paint time; the app calls
+``refresh()`` after turns and on a slow timer.
+"""
+from __future__ import annotations
+
+from rich.text import Text
+from textual.containers import VerticalScroll
+from textual.widget import Widget
+
+from . import theme as ui
+from .. import state
+
+
+def _fmt_tokens(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
+_CTX_CACHE: dict[str, int | None] = {}
+
+
+def _catalog_context(model: str) -> int | None:
+    """Context window models.dev lists for ``model`` on the active provider."""
+    try:
+        from ..auth import models_dev
+
+        m = models_dev.find_model(model, state.provider or "")
+    except Exception:
+        return None
+    return (m.context or None) if m is not None else None
+
+
+def context_window(model: str) -> int | None:
+    """Best-known context window for ``model`` (None when unknown)."""
+    # The active provider's own listing wins (memoised in models_dev); the
+    # same id can carry a different window on another provider.
+    found = _catalog_context(model)
+    if found:
+        return found
+    if model in _CTX_CACHE:
+        return _CTX_CACHE[model]
+    ctx: int | None = None
+    low = (model or "").lower()
+    if low.startswith("claude"):
+        ctx = 200_000
+    else:
+        try:
+            from ..auth import catalog_cache
+            from ..auth.openrouter_catalog import CACHE_NAME
+
+            payload, _fresh = catalog_cache.read(CACHE_NAME)
+            for row in payload or []:
+                if isinstance(row, dict) and row.get("id") == model:
+                    ctx = int(row.get("context_length") or 0) or None
+                    break
+        except Exception:
+            ctx = None
+    _CTX_CACHE[model] = ctx
+    return ctx
+
+
+def meter(fraction: float, width: int = 16) -> Text:
+    """``▰▰▰▱▱▱`` usage bar, green → amber → red as it fills."""
+    fraction = max(0.0, min(1.0, fraction))
+    filled = round(fraction * width)
+    color = ui.OK if fraction < 0.6 else ui.WARN if fraction < 0.85 else ui.ERR
+    out = Text()
+    out.append("▰" * filled, style=color)
+    out.append("▱" * (width - filled), style=ui.BG_4)
+    return out
+
+
+def session_title(limit: int = 60) -> str:
+    for m in state.messages:
+        if m.get("role") == "user" and isinstance(m.get("content"), str):
+            t = " ".join(m["content"].split())
+            if t:
+                return t if len(t) <= limit else t[: limit - 1] + "…"
+    return "New session"
+
+
+class SidebarBody(Widget):
+    DEFAULT_CSS = """
+    SidebarBody {
+        height: auto;
+        width: 1fr;
+    }
+    """
+
+    can_focus = False
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Clickable rows: logical line index → (kind, name, status). The index
+        # is the number of "\n" before the row, so a click maps back through
+        # the same wrapping the renderer used (see ``_hit_at``).
+        self._hits: dict[int, tuple[str, str, str]] = {}
+        self._last: Text | None = None
+
+    def _hit_at(self, y: int) -> tuple[str, str, str] | None:
+        text = self._last
+        if text is None or not self._hits:
+            return None
+        width = max(1, self.size.width)
+        console = self.app.console
+        row = 0
+        for idx, seg in enumerate(text.split("\n", allow_blank=True)):
+            height = max(1, len(seg.wrap(console, width))) if seg.plain else 1
+            if row <= y < row + height:
+                return self._hits.get(idx)
+            row += height
+        return None
+
+    def on_click(self, event) -> None:
+        hit = self._hit_at(event.y)
+        if hit is None:
+            return
+        kind, name, status = hit
+        event.stop()
+        app = self.app
+        if kind == "mcp":
+            app.mcp_sidebar_click(name, status)
+        elif kind == "mcp-add":
+            app.open_mcp_add()
+        elif kind == "skill-add":
+            app.open_skill_add()
+        elif kind == "skills":
+            app._open_skill_browser()
+
+    def render(self) -> Text:
+        app = self.app
+        out = Text()
+        hits: dict[int, tuple[str, str, str]] = {}
+
+        def hit(kind: str, name: str = "", status: str = "") -> None:
+            """Register the row just started (after its ``\n``) as clickable."""
+            hits[out.plain.count("\n")] = (kind, name, status)
+
+        def section(title: str, icon: str = "") -> None:
+            if out.plain:
+                out.append("\n\n")
+            if icon:
+                out.append(f"{icon} ", style=ui.ACCENT)
+            out.append(title, style=f"bold {ui.FG}")
+
+        def line(text: str, style: str = "", prefix: str = "") -> None:
+            out.append("\n")
+            if prefix:
+                out.append(prefix)
+            out.append(text, style=style or ui.FG_MUTE)
+
+        # session
+        out.append(session_title(), style=f"bold {ui.FG}")
+        sid = state.current_session_id
+        n_msgs = len(state.messages)
+        meta = f"#{sid} · " if sid is not None else ""
+        line(f"{meta}{n_msgs} message{'s' if n_msgs != 1 else ''}", ui.FG_DIM)
+
+        section("Context", "◔")
+        total = int(getattr(state, "total_tokens", 0) or 0)
+        window = context_window(state.MODEL)
+        if window and total:
+            used = int(state.total_in or 0) + int(state.total_out or 0)
+            frac = used / window
+            out.append("\n")
+            out.append_text(meter(frac))
+            out.append(f" {frac * 100:.0f}%", style=ui.FG_MUTE)
+            line(f"{_fmt_tokens(used)} / {_fmt_tokens(window)} tokens", ui.FG_DIM)
+        else:
+            line(f"{_fmt_tokens(total)} tokens" if total else "no usage yet")
+        if total and not window:
+            line(f"↑ {_fmt_tokens(int(state.total_in or 0))}  ↓ {_fmt_tokens(int(state.total_out or 0))}",
+                 ui.FG_DIM)
+        try:
+            from ..constants import model_pricing
+
+            price = model_pricing(state.MODEL, state.provider)
+            if price and (price[0] or price[1]) and total:
+                from ..repl.stats import estimated_cost
+
+                line(f"${estimated_cost():.4f} spent", ui.FG_DIM)
+        except Exception:
+            pass
+
+        section("Model", "◇")
+        line(state.MODEL, ui.FG)
+        bits = []
+        try:
+            from ..constants.providers import PROVIDER_LABELS, provider_label  # noqa: F401
+
+            bits.append(provider_label(str(state.provider or "")))
+        except Exception:
+            pass
+        if state.think_mode:
+            bits.append(f"think {state.think_effort}")
+        if bits:
+            line(" · ".join(b for b in bits if b), ui.FG_DIM)
+        rec = state.active_agent
+        if rec is None and state.active_agent_name:
+            try:
+                rec = state.resolve_active_agent()
+            except Exception:
+                rec = None
+        if rec:
+            color = (rec.get("color") or "").strip() or ui.ACCENT
+            icon = (rec.get("icon") or "").strip()
+            line(f"{icon + ' ' if icon else ''}{rec['name']}", f"bold {color}")
+        flags = []
+        if state.plan_mode:
+            flags.append(("plan mode", ui.WARN))
+        if state.auto_approve:
+            flags.append(("auto-approve", ui.WARN))
+        if flags:
+            out.append("\n")
+            for i, (label, color) in enumerate(flags):
+                if i:
+                    out.append(" · ", style=ui.FG_DIM)
+                out.append(label, style=color)
+
+        # MCP — always shown: the "+ add" row is the way in for anyone who
+        # doesn't know where servers are configured.
+        try:
+            from ..mcp.config import get_config
+            from ..mcp.registry import mcp_registry
+
+            mcp_config = get_config()
+            servers = mcp_config.list_servers()
+            source_of = getattr(mcp_config, "get_source", None)
+        except Exception:
+            servers, source_of = {}, None
+        section("MCP", "◈")
+        names = list(servers.items())
+        for name, cfg in names[:8]:
+            try:
+                h = mcp_registry.get_server_health(name)
+                status = h.get("status", "idle")
+            except Exception:
+                status = "idle"
+            color = {
+                "live": ui.OK, "warn": ui.WARN, "failed": ui.ERR, "connecting": ui.ACCENT,
+                "auth": ui.WARN,
+            }.get(status, ui.FG_DIM)
+            out.append("\n")
+            hit("mcp", name, status)
+            out.append("◐ " if status == "auth" else "● ", style=color)
+            out.append(name, style=ui.FG_MUTE if status != "auth" else f"underline {ui.FG}")
+            if status == "auth":
+                out.append("  sign in", style=f"bold {ui.WARN}")
+            elif status in ("failed", "connecting"):
+                out.append(f" {status}", style=ui.FG_DIM)
+            elif source_of is not None:
+                # where it comes from: project / arkad / claude / cursor …
+                out.append(f"  {source_of(name) or ''}", style=ui.FG_DIM)
+        if len(names) > 8:
+            out.append("\n")
+            hit("mcp")
+            out.append(f"+{len(names) - 8} more", style=ui.FG_DIM)
+        out.append("\n")
+        hit("mcp-add")
+        out.append("+ add MCP server", style=ui.ACCENT if not names else ui.FG_DIM)
+
+        # Skills
+        try:
+            from ..storage import skills as _sk
+
+            cached = getattr(_sk, "_cache", None) or []
+        except Exception:
+            cached = []
+        section("Skills", "★")
+        if cached:
+            out.append("\n")
+            hit("skills")
+            out.append(f"{len(cached)} available", style=ui.FG_MUTE)
+        out.append("\n")
+        hit("skill-add")
+        out.append("+ install skill", style=ui.ACCENT if not cached else ui.FG_DIM)
+
+        # modified files
+        con = getattr(app, "_tui_console", None)
+        changed = getattr(con, "changed_files", None) if con is not None else None
+        if changed:
+            section("Modified Files", "✎")
+            for path, (added, removed) in list(changed.items())[-10:]:
+                out.append("\n")
+                name = path if len(path) <= 26 else "…" + path[-25:]
+                out.append(name, style=ui.FG_MUTE)
+                out.append(" ")
+                if added:
+                    out.append(f"+{added}", style=ui.OK)
+                if removed:
+                    out.append(f" -{removed}", style=ui.ERR)
+
+        # background jobs (run_bg)
+        try:
+            from ..tools.background import fmt_secs, jobs as bg_jobs
+
+            bg = bg_jobs()[-6:]
+        except Exception:
+            bg = []
+        if bg:
+            section("Background", "&")
+            for job in bg:
+                if job.running:
+                    mark, color, status = "●", ui.ACCENT, fmt_secs(job.elapsed)
+                elif job.killed:
+                    mark, color, status = "✕", ui.FG_DIM, "stopped"
+                elif job.code == 0:
+                    mark, color, status = "✓", ui.OK, "done"
+                else:
+                    mark, color, status = "✗", ui.ERR, f"exit {job.code}"
+                cmd = " ".join(job.cmd.split())
+                cmd = cmd if len(cmd) <= 20 else cmd[:19] + "…"
+                out.append("\n")
+                out.append(f"{mark} ", style=color)
+                out.append(f"#{job.id} {cmd}", style=ui.FG_MUTE)
+                out.append(f" {status}", style=ui.FG_DIM)
+
+        tools = int(getattr(state, "tool_calls_count", 0) or 0)
+        if tools:
+            section("Tools", "$")
+            line(f"{tools} call{'s' if tools != 1 else ''} this session", ui.FG_DIM)
+        self._hits = hits
+        self._last = out
+        return out
+
+
+class Sidebar(VerticalScroll):
+    DEFAULT_CSS = """
+    Sidebar {
+        width: 38;
+        height: 100%;
+        background: $jv-bg-1;
+        padding: 1 2;
+        scrollbar-size-vertical: 0;
+    }
+    Sidebar.hidden {
+        display: none;
+    }
+    """
+
+    can_focus = False
+
+    def compose(self):
+        yield SidebarBody()
+
+    def refresh_body(self) -> None:
+        try:
+            self.query_one(SidebarBody).refresh(layout=True)
+        except Exception:
+            pass

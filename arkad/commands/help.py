@@ -1,0 +1,137 @@
+"""/help — show the command reference, optionally filtered by topic/keyword."""
+from ..console import console, Panel, Table
+
+
+_SECTIONS = [
+    ("Session", [
+        ("/help", "this menu — pass a keyword to filter, e.g. /help session"),
+        ("/new", "start a fresh conversation (keeps pinned context)"),
+        ("/reset", "clear conversation"),
+        ("/history", "show message summary"),
+        ("/export <file>", "export conversation as markdown"),
+        ("/session", "list persisted sessions & resume"),
+        ("/session resume <id>", "resume a session by id"),
+        ("/session delete <id>", "delete a stored session"),
+        ("/clear", "clear the terminal screen"),
+        ("/exit", "quit"),
+    ]),
+    ("Context", [
+        ("/pin [<text>]", "view pinned context · append text · /pin on|off|toggle to pause injection"),
+        ("/unpin", "clear pinned context"),
+    ]),
+    ("Memory", [
+        ("/memory", "open the memory modal · a add · d delete · c clear · r refresh"),
+    ]),
+    ("Lessons (agent self-learning)", [
+        ("/lesson", "open the lesson modal · / search · a add · d delete · c clear · r refresh"),
+    ]),
+    ("Skills (LLM auto-invokes by description)", [
+        ("/skill", "open the skill browser modal · Enter preview · g global · r refresh"),
+    ]),
+    ("Local Commands (shell/file/git — no LLM)", [
+        ("/local", "open the local-commands modal · search, select, and run instantly"),
+        ("  (available: /ls /cd /pwd /find /run /undo /git /diff)", "type or arrow-key to filter"),
+    ]),
+    ("Clipboard", [
+        ("/copy", "copy last reply as clean text (no borders/padding) — same as Ctrl+Y"),
+        ("/copy code", "copy the last fenced code block from the reply"),
+        ("/copy all", "copy the whole conversation as markdown"),
+        ("/paste", "send clipboard text, or OCR a clipboard image, as the next message"),
+        ("plain prompt + image clipboard", "type your prompt normally; a fresh clipboard image is OCR'd and attached"),
+    ]),
+    ("Agents", [
+        ("/agent", "open the agent control modal · n new · e edit · p preview · g global · s scope · o default"),
+        ("/agent init", "scaffold a .arkad/ tree in the current project"),
+    ]),
+    ("Custom Commands (your reusable prompts)", [
+        ("/<name> [args]", "trigger a custom command directly — e.g. /pr-description extra notes"),
+        ("/command", "open the command manager modal · ↵ to input · t template · n new · e edit · d delete · i/x import/export · g global"),
+        ("/command new <name> [desc]", "create one — edit the .md template, then trigger as /<name>"),
+        ("/command edit|show|delete <name>", "manage a command file"),
+        ("/command export|import <name>", "copy between project (.arkad/commands) and global (~/.arkad/commands)"),
+        ("/command global on|off", "toggle global command discovery (persisted)"),
+        ("/command scope project|global", "where /command new writes"),
+        ("  $ARGUMENTS · $1…$9", "placeholders in the template, filled from what you type after /<name>"),
+    ]),
+    ("Web remote (browser / phone)", [
+        ("/web · /web qr", "QR code + link to open this session in a browser — starts the remote if needed"),
+        ("/web open", "open this session in this computer's browser (or click 🌐 web next to the prompt)"),
+        ("/web anywhere · /web local", "public link for any network (Cloudflare quick tunnel or ngrok) · back to Wi-Fi only"),
+        ("/web hide · /web show", "hide / pin the corner QR (or click the QR to hide it)"),
+        ("/web copy · /web stop", "copy the link · stop the web remote"),
+    ]),
+    ("Theme", [
+        ("/theme", "open the theme picker (15 themes — live preview)"),
+    ]),
+    ("MCP (Model Context Protocol)", [
+        ("/mcp", "open the MCP control modal — list, toggle, import JSON, scope"),
+    ]),
+    ("Settings", [
+        ("/settings", "open the settings modal · e edit · r reset · R reload · p path · o $EDITOR"),
+    ]),
+    ("Control", [
+        ("/upgrade", "update Arkad to the latest version (git pull + pip install)"),
+        ("/upgrade check", "check version status without upgrading"),
+        ("/version", "show Arkad version"),
+        ("/think", "toggle extended thinking"),
+        ("/think mode", "open thinking effort picker (xhigh/high/medium/low/minimal/none)"),
+        ("/verbose", "toggle internal tool trace (thinking panels only with /think on)"),
+        ("/auto", "toggle auto-approve bash"),
+        ("/plan", "toggle plan mode — read-only research until you approve a plan"),
+        ("/model <name>", "switch model (Arkad Agent free tier listed first)"),
+        ("/provider", "provider setup hub — OAuth login, API keys, and provider switch"),
+        ("/provider <name>", "switch provider (anthropic/openrouter/opencode/opencode_zen)"),
+        ("/stats", "session stats (time, msgs, tools, tokens)"),
+    ]),
+    ("Keyboard (TUI)", [
+        ("Enter", "send"),
+        ("Shift+Enter / Alt+Enter / Ctrl+J", "insert newline"),
+        ("/", "open command palette"),
+        ("Tab", "cycle agents"),
+        ("Ctrl+T", "toggle internal tool trace (logs/thinking panels)"),
+        ("Ctrl+F", "open scrollable full tool output viewer"),
+        ("Esc", "cancel current turn"),
+        ("Ctrl+Y", "copy last reply to clipboard (clean text)"),
+        ("Ctrl+C", "cancel turn · press twice to quit"),
+        ("Ctrl+D", "quit"),
+    ]),
+]
+
+
+def _filter(query: str):
+    q = query.strip().lower()
+    if not q:
+        return _SECTIONS
+    out = []
+    for section, rows in _SECTIONS:
+        kept = [
+            (c, d)
+            for (c, d) in rows
+            if q in c.lower() or q in d.lower() or q in section.lower()
+        ]
+        if kept:
+            out.append((section, kept))
+    return out
+
+
+def cmd_help(arg: str = ""):
+    """Show the command reference. With *arg* set, only show matching commands."""
+    sections = _filter(arg)
+    title = "≡ commands"
+    if arg:
+        if not sections:
+            console.print(
+                f"[yellow]no commands matched[/] [dim]'{arg}'[/]  "
+                f"[dim](try /help for the full list)[/]"
+            )
+            return
+        title = f"≡ commands matching '{arg}'"
+
+    t = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
+    t.add_column("command")
+    t.add_column("description")
+    for section, rows in sections:
+        t.add_row(f"[bold yellow]── {section} ──[/]", "")
+        for c, d in rows:
+            t.add_row(f"[cyan]{c}[/]", d)
+    console.print(Panel(t, title=title, border_style="blue"))

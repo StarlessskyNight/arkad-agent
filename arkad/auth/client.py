@@ -1,0 +1,650 @@
+"""Build an Anthropic-SDK client for the active provider; validate & retry.
+
+Providers:
+  - anthropic  → api.anthropic.com, auth via API key OR OAuth (existing flow).
+  - openrouter → openrouter.ai/api/v1 (Anthropic-compatible /v1/messages),
+                 auth via Bearer token using the Anthropic SDK's `auth_token=`.
+"""
+import os, sys
+
+from ..console import console, Anthropic, APIStatusError, APIConnectionError
+from ..constants import (
+    KEY_FILE, OPENROUTER_KEY_FILE, OPENCODE_ZEN_KEY_FILE, AUTH_MODE_FILE, PROVIDER_FILE,
+    OPENROUTER_BASE_URL,
+    OPENCODE_ZEN_BASE_URL,
+    arkad_agent_default_model,
+    PROVIDER_ANTHROPIC, PROVIDER_OPENROUTER, PROVIDER_OPENCODE, PROVIDER_OPENCODE_ZEN,
+    PROVIDER_OPENAI_CODEX, PROVIDER_ARKAD_AGENT, PROVIDERS,
+    is_arkad_agent_model, is_catalog_provider,
+    AUTH_API_KEY, AUTH_OAUTH, DEFAULT_RETRIES, DEFAULT_BASH_TIMEOUT,
+    normalize_model_for_provider,
+)
+from ..utils.io import _secure_write
+from .. import state
+from .api_key import load_key, prompt_for_key
+from .openrouter import load_openrouter_key, prompt_for_openrouter_key
+from .opencode import load_opencode_key, prompt_for_opencode_key
+from .opencode_zen import load_opencode_zen_key, prompt_for_opencode_zen_key, has_opencode_zen_key
+from .arkad_agent import build_arkad_agent_client, should_use_arkad_agent_client
+from .opencode_client import OpenCodeClient
+from .oauth_tokens import (
+    load_oauth_tokens, clear_oauth_tokens, oauth_refresh, get_fresh_oauth_token,
+    oauth_client_headers,
+)
+from .anthropic_models import defer_anthropic_model_sync, sync_anthropic_model_ids
+from .codex_client import CodexClient
+from .codex_oauth_tokens import get_fresh_codex_oauth_token, load_codex_oauth_tokens
+from .oauth_flow import oauth_login
+from .mode_picker import _choose_auth_mode
+
+
+from .http_timeout import arkad_http_timeout as _http_timeout
+from ..constants.providers import CATALOG_PREFIX
+
+
+def _build_openrouter_client() -> Anthropic:
+    key = load_openrouter_key()
+    return Anthropic(
+        api_key=None,
+        auth_token=key,  # sends "Authorization: Bearer <key>"
+        base_url=OPENROUTER_BASE_URL,
+        timeout=_http_timeout(openrouter=True),
+        default_headers={
+            "HTTP-Referer": "https://github.com/arkad-agent",
+            "X-Title": "arkad",
+        },
+    )
+
+
+def _build_client_from_mode(mode: str, *, interactive: bool = True) -> Anthropic:
+    """Construct a client. `mode` is 'openrouter' | 'oauth' | 'api_key'.
+
+    If state.provider is openrouter, ignore `mode` and build an OpenRouter client.
+    """
+    if mode == PROVIDER_OPENROUTER or state.provider == PROVIDER_OPENROUTER:
+        return _build_openrouter_client()
+    if mode == AUTH_OAUTH:
+        tokens = get_fresh_oauth_token()
+        if not tokens:
+            if not interactive:
+                raise RuntimeError("Anthropic OAuth not configured")
+            tokens = oauth_login()
+        if not tokens:
+            if not interactive:
+                raise RuntimeError("Anthropic OAuth not configured")
+            new_mode = _choose_auth_mode()
+            state.auth_mode = new_mode
+            _secure_write(AUTH_MODE_FILE, new_mode)
+            return _build_client_from_mode(new_mode, interactive=interactive)
+        return Anthropic(
+            api_key=None,
+            auth_token=tokens["access_token"],
+            timeout=_http_timeout(openrouter=False),
+            default_headers=oauth_client_headers(),
+        )
+    return Anthropic(api_key=load_key(), timeout=_http_timeout(openrouter=False))
+
+
+def _has_openrouter_key() -> bool:
+    if os.getenv("OPENROUTER_API_KEY"):
+        return True
+    try:
+        return OPENROUTER_KEY_FILE.exists() and bool(OPENROUTER_KEY_FILE.read_text().strip())
+    except OSError:
+        return False
+
+
+def _has_opencode_key() -> bool:
+    from ..constants.paths import OPENCODE_KEY_FILE
+    if os.getenv("OPENCODE_API_KEY"):
+        return True
+    try:
+        return OPENCODE_KEY_FILE.exists() and bool(OPENCODE_KEY_FILE.read_text().strip())
+    except OSError:
+        return False
+
+
+def _has_opencode_zen_key() -> bool:
+    return has_opencode_zen_key()
+
+
+def _has_catalog_key(provider: str) -> bool:
+    """A key for a models.dev provider (``md:<id>``). Deliberately not part of
+    ``_has_usable_provider_credentials``: an unrelated OPENAI_API_KEY in the
+    shell must not move a first run off the free tier."""
+    try:
+        from .catalog_keys import has_key
+
+        return has_key(provider)
+    except Exception:
+        return False
+
+
+def _has_usable_anthropic_auth() -> bool:
+    if _has_anthropic_api_key() or load_oauth_tokens():
+        return True
+    if not AUTH_MODE_FILE.exists():
+        return False
+    try:
+        stored = AUTH_MODE_FILE.read_text().strip()
+    except OSError:
+        return False
+    if stored == AUTH_OAUTH and load_oauth_tokens():
+        return True
+    if stored == AUTH_API_KEY and _has_anthropic_api_key():
+        return True
+    return False
+
+
+def _has_usable_provider_credentials() -> bool:
+    """True when at least one paid/configured provider has working auth."""
+    if (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or os.getenv("OPENCODE_API_KEY")
+        or os.getenv("OPENCODE_ZEN_API_KEY")
+    ):
+        return True
+    if _has_usable_anthropic_auth() or load_codex_oauth_tokens():
+        return True
+    if _has_openrouter_key() or _has_opencode_key() or _has_opencode_zen_key():
+        return True
+    return False
+
+
+def _has_any_provider_credentials() -> bool:
+    """Backward-compatible alias — only counts credentials that actually work."""
+    return _has_usable_provider_credentials()
+
+
+def _has_anthropic_api_key() -> bool:
+    return bool(os.getenv("ANTHROPIC_API_KEY")) or (
+        KEY_FILE.exists() and bool(KEY_FILE.read_text().strip())
+    )
+
+
+def _resolve_auth_mode(*, interactive: bool) -> str | None:
+    """Pick Anthropic auth mode without prompting when ``interactive=False``."""
+    if os.getenv("ANTHROPIC_API_KEY") or KEY_FILE.exists():
+        return AUTH_API_KEY
+    if load_oauth_tokens():
+        return AUTH_OAUTH
+    if AUTH_MODE_FILE.exists():
+        stored = AUTH_MODE_FILE.read_text().strip()
+        if stored == AUTH_OAUTH and load_oauth_tokens():
+            return AUTH_OAUTH
+        if stored == AUTH_API_KEY and _has_anthropic_api_key():
+            return AUTH_API_KEY
+        if stored == AUTH_OAUTH and not load_oauth_tokens():
+            return None
+        if stored == AUTH_API_KEY and not _has_anthropic_api_key():
+            return None
+    if not interactive:
+        return None
+    return _choose_auth_mode()
+
+
+def _resolve_provider(*, interactive: bool = True) -> str:
+    """Decide provider from env → saved → stored → first-run Arkad Agent default."""
+    env_provider = os.getenv("ARKAD_PROVIDER", "").strip().lower()
+    if env_provider in (PROVIDER_ANTHROPIC, PROVIDER_OPENROUTER, PROVIDER_OPENCODE, PROVIDER_OPENCODE_ZEN, PROVIDER_OPENAI_CODEX):
+        return env_provider
+    if env_provider.startswith(CATALOG_PREFIX):
+        return env_provider
+    # Legacy: ANTHROPIC_API_KEY env var pins to Anthropic.
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return PROVIDER_ANTHROPIC
+    if os.getenv("OPENROUTER_API_KEY") and not KEY_FILE.exists() and not AUTH_MODE_FILE.exists():
+        return PROVIDER_OPENROUTER
+    if os.getenv("OPENCODE_API_KEY") and not KEY_FILE.exists() and not AUTH_MODE_FILE.exists():
+        return PROVIDER_OPENCODE
+    if os.getenv("OPENCODE_ZEN_API_KEY") and not KEY_FILE.exists() and not AUTH_MODE_FILE.exists():
+        return PROVIDER_OPENCODE_ZEN
+    try:
+        from ..storage.prefs import load_saved_preferences
+        saved_model, saved_provider = load_saved_preferences()
+    except Exception:
+        saved_model, saved_provider = "", ""
+    # Only a provider Arkad still has (a removed one — e.g. Kimchi — falls through).
+    if saved_model and saved_provider and (saved_provider in PROVIDERS or is_catalog_provider(saved_provider)):
+        return saved_provider
+    try:
+        from ..storage.prefs import load_saved_provider
+        saved_provider = load_saved_provider()
+    except Exception:
+        saved_provider = ""
+    if saved_provider == PROVIDER_OPENAI_CODEX and load_codex_oauth_tokens():
+        return PROVIDER_OPENAI_CODEX
+    if saved_provider == PROVIDER_ANTHROPIC and _has_usable_anthropic_auth():
+        return PROVIDER_ANTHROPIC
+    if saved_provider == PROVIDER_OPENROUTER and _has_openrouter_key():
+        return PROVIDER_OPENROUTER
+    if saved_provider == PROVIDER_OPENCODE and _has_opencode_key():
+        return PROVIDER_OPENCODE
+    if saved_provider == PROVIDER_OPENCODE_ZEN:
+        return PROVIDER_OPENCODE_ZEN
+    if is_catalog_provider(saved_provider) and _has_catalog_key(saved_provider):
+        return saved_provider
+    if PROVIDER_FILE.exists():
+        try:
+            stored = PROVIDER_FILE.read_text().strip()
+        except OSError:
+            stored = ""
+        if stored == PROVIDER_OPENAI_CODEX and load_codex_oauth_tokens():
+            return PROVIDER_OPENAI_CODEX
+        if stored == PROVIDER_ANTHROPIC and _has_usable_anthropic_auth():
+            return PROVIDER_ANTHROPIC
+        if stored == PROVIDER_OPENROUTER and _has_openrouter_key():
+            return PROVIDER_OPENROUTER
+        if stored == PROVIDER_OPENCODE and _has_opencode_key():
+            return PROVIDER_OPENCODE
+        if stored == PROVIDER_OPENCODE_ZEN:
+            if _has_opencode_zen_key():
+                return PROVIDER_OPENCODE_ZEN
+            if not _has_usable_provider_credentials():
+                return PROVIDER_OPENCODE_ZEN
+        if is_catalog_provider(stored) and _has_catalog_key(stored):
+            return stored
+    if _has_usable_anthropic_auth():
+        return PROVIDER_ANTHROPIC
+    if load_codex_oauth_tokens():
+        return PROVIDER_OPENAI_CODEX
+    if _has_openrouter_key():
+        return PROVIDER_OPENROUTER
+    if _has_opencode_key():
+        return PROVIDER_OPENCODE
+    if _has_opencode_zen_key():
+        return PROVIDER_OPENCODE_ZEN
+    # First run — free Arkad Agent (no API key, no provider prompt).
+    return PROVIDER_OPENCODE_ZEN
+
+
+def _build_opencode_client() -> OpenCodeClient:
+    from ..constants.providers import native_responses_models
+
+    key = load_opencode_key()
+    # models.dev knows which Go models the gateway serves on /responses.
+    return OpenCodeClient(api_key=key, responses_models=native_responses_models(PROVIDER_OPENCODE))
+
+
+def _build_opencode_zen_client() -> OpenCodeClient:
+    from ..constants.providers import native_responses_models
+
+    key = load_opencode_zen_key()
+    return OpenCodeClient(
+        api_key=key,
+        base_url=f"{OPENCODE_ZEN_BASE_URL}/",
+        responses_models=native_responses_models(PROVIDER_OPENCODE_ZEN),
+    )
+
+
+def _catalog_hints(provider: str):
+    """Per-model request facts for a catalog provider's OpenAI-style client."""
+    from . import models_dev
+
+    def hint(model: str) -> dict | None:
+        m = models_dev.get_model(provider, model)
+        if m is None:
+            return None
+        return {
+            "reasoning": m.reasoning,
+            "reasoning_field": m.reasoning_field,
+            "max_output": m.output,
+            "wire": m.wire,
+        }
+
+    return hint
+
+
+def prompt_for_catalog_key(provider: str, reason: str = "") -> str:
+    """Ask for a catalog provider's key (TUI: a password modal) and save it.
+
+    Returns the key, or "" when the user gave none.
+    """
+    from . import models_dev, catalog_keys
+
+    prov = models_dev.get_provider(provider)
+    name = prov.name if prov else provider
+    if reason:
+        console.print(f"[red]{reason}[/]")
+    hint = f" (from {prov.doc})" if prov and prov.doc else ""
+    console.print(f"[yellow]{name} API key needed{hint}[/]")
+    try:
+        key = console.input(f"Paste {name} API key: ", password=True).strip()
+    except TypeError:  # a console without password support
+        key = console.input(f"Paste {name} API key: ").strip()
+    if key:
+        catalog_keys.save(provider, key)
+        console.print(f"[green]✓ {name} key saved[/]")
+    return key
+
+
+def _build_catalog_client(provider: str):
+    """Client for a provider discovered from models.dev (``md:<id>``).
+
+    Most speak OpenAI chat-completions and get an ``OpenCodeClient`` pointed
+    at their base URL; a few speak Anthropic messages and get the Anthropic
+    SDK. Raises RuntimeError when the provider, its key or a URL variable is
+    missing — callers fall back to the free tier.
+    """
+    from . import models_dev, catalog_keys
+
+    prov = models_dev.get_provider(provider)
+    if prov is None:
+        # Cold or cleared cache: one fetch so a saved choice survives it.
+        models_dev.refresh(timeout=10)
+        prov = models_dev.get_provider(provider)
+    if prov is None:
+        raise RuntimeError(f"{provider} is not in the models.dev catalog")
+    base = models_dev.base_url(prov)
+    if base is None:
+        missing = ", ".join(models_dev.missing_vars(prov))
+        raise RuntimeError(f"{prov.name} needs {missing} set in the environment")
+    key = catalog_keys.get_key(provider)
+    if not key:
+        raise RuntimeError(f"no API key for {prov.name} — add one with /key")
+    if prov.wire == models_dev.WIRE_ANTHROPIC:
+        return Anthropic(api_key=key, base_url=base, timeout=_http_timeout(openrouter=True))
+    return OpenCodeClient(
+        api_key=key,
+        base_url=f"{base.rstrip('/')}/",
+        default_headers={"User-Agent": "arkad-agent/1.0"},
+        model_hints=_catalog_hints(provider),
+        max_tokens_param="max_completion_tokens" if prov.mid == "openai" else "max_tokens",
+    )
+
+
+def _build_opencode_zen_client_for_model(
+    model: str | None = None,
+    *,
+    source: str = "",
+) -> OpenCodeClient:
+    if source in (PROVIDER_ARKAD_AGENT, PROVIDER_OPENCODE_ZEN):
+        # An explicit /model pick decides the tier — otherwise choosing a paid
+        # Zen model while on the free tier would keep the free client.
+        use_free = source == PROVIDER_ARKAD_AGENT
+    else:
+        use_free = state.arkad_agent_free or should_use_arkad_agent_client(model)
+    state.arkad_agent_free = use_free
+    if use_free:
+        return build_arkad_agent_client()
+    return _build_opencode_zen_client()
+
+
+def _pick_fallback_provider(*, interactive: bool = True) -> str | None:
+    """Choose another provider when Codex OAuth is unavailable."""
+    if load_oauth_tokens() or _has_anthropic_api_key():
+        return PROVIDER_ANTHROPIC
+    if _has_openrouter_key():
+        return PROVIDER_OPENROUTER
+    from ..constants.paths import OPENCODE_KEY_FILE
+    try:
+        if OPENCODE_KEY_FILE.exists() and OPENCODE_KEY_FILE.read_text().strip():
+            return PROVIDER_OPENCODE
+        if OPENCODE_ZEN_KEY_FILE.exists() and OPENCODE_ZEN_KEY_FILE.read_text().strip():
+            return PROVIDER_OPENCODE_ZEN
+    except OSError:
+        pass
+    # Always fall back to free Arkad Agent rather than blocking startup.
+    return PROVIDER_OPENCODE_ZEN
+
+
+def _build_codex_client() -> CodexClient | None:
+    tokens = get_fresh_codex_oauth_token()
+    if not tokens:
+        return None
+    return CodexClient(tokens["access_token"])
+
+
+def _fallback_arkad_agent_client(*, preferred_model: str = ""):
+    """Last-resort free tier — no API key, always available."""
+    state.provider = PROVIDER_OPENCODE_ZEN
+    state.arkad_agent_free = True
+    pref = (preferred_model or "").strip()
+    if pref and is_arkad_agent_model(pref):
+        state.MODEL = pref
+    elif not is_arkad_agent_model(state.MODEL or ""):
+        state.MODEL = arkad_agent_default_model()
+    _secure_write(PROVIDER_FILE, state.provider)
+    return build_arkad_agent_client()
+
+
+def _none_or_arkad(*, interactive: bool, preferred_model: str = ""):
+    """TUI startup: never leave the user without a client when keys are missing."""
+    if interactive:
+        return None
+    return _fallback_arkad_agent_client(preferred_model=preferred_model)
+
+
+def _ensure_operational_provider() -> None:
+    """Drop stale provider selection when credentials are missing."""
+    from ..constants.providers import provider_is_operational, PROVIDERS
+    from ..storage.prefs import load_saved_model
+
+    if load_saved_model():
+        return
+    if provider_is_operational(state.provider):
+        return
+    for prov in PROVIDERS:
+        if provider_is_operational(prov):
+            state.provider = prov
+            _secure_write(PROVIDER_FILE, state.provider)
+            return
+
+
+def _make_first_run_arkad_client(*, interactive: bool):
+    """Fresh install: start on the free Arkad Agent tier (no API key)."""
+    state.arkad_agent_free = True
+    return _fallback_arkad_agent_client(preferred_model="")
+
+
+def _saved_provider_removed() -> bool:
+    """True when the saved provider is one Arkad dropped (e.g. Kimchi)."""
+    try:
+        from ..storage.prefs import load_saved_preferences, load_saved_provider
+
+        saved = [load_saved_preferences()[1], load_saved_provider()]
+    except Exception:
+        return False
+    return any(p and p not in PROVIDERS and not is_catalog_provider(p) for p in saved)
+
+
+def make_client(*, interactive: bool = True, _retried: bool = False):
+    """Resolve provider + auth, build client, validate; handle 401 with refresh/re-auth.
+
+    When ``interactive=False`` (TUI default), never opens Rich console login prompts.
+    Falls back to free Arkad Agent when no credentials are configured.
+    """
+    from ..storage.prefs import load_saved_model, should_use_first_run_arkad_defaults
+    from ..constants.providers import model_belongs_to_provider
+
+    if should_use_first_run_arkad_defaults():
+        return _make_first_run_arkad_client(interactive=interactive)
+
+    preferred_model = load_saved_model().strip()
+    state.MODEL = preferred_model
+
+    state.provider = _resolve_provider(interactive=interactive)
+    catalog_ready = is_catalog_provider(state.provider) and _has_catalog_key(state.provider)
+    if not interactive and not _has_usable_provider_credentials() and not catalog_ready:
+        state.provider = PROVIDER_OPENCODE_ZEN
+        state.arkad_agent_free = True
+    _secure_write(PROVIDER_FILE, state.provider)
+
+    if state.provider == PROVIDER_OPENCODE_ZEN and not _has_usable_provider_credentials():
+        state.arkad_agent_free = True
+        state.MODEL = preferred_model
+        # The saved choice survives losing a credential (sign back in and it's
+        # there) — but not a provider Arkad no longer has (Kimchi): nothing
+        # serves that model, so every turn would fail.
+        if _saved_provider_removed() and not is_arkad_agent_model(preferred_model):
+            state.MODEL = arkad_agent_default_model()
+    elif model_belongs_to_provider(preferred_model, state.provider):
+        state.MODEL = preferred_model
+        if state.provider == PROVIDER_OPENCODE_ZEN:
+            state.arkad_agent_free = should_use_arkad_agent_client(state.MODEL)
+    else:
+        state.MODEL = normalize_model_for_provider(state.MODEL, state.provider)
+        if state.provider == PROVIDER_OPENCODE_ZEN:
+            state.arkad_agent_free = should_use_arkad_agent_client(state.MODEL)
+
+    prev_provider = state.provider
+    _ensure_operational_provider()
+    if state.provider != prev_provider and not load_saved_model():
+        state.MODEL = normalize_model_for_provider(state.MODEL, state.provider)
+        state.arkad_agent_free = (
+            state.provider == PROVIDER_OPENCODE_ZEN
+            and should_use_arkad_agent_client(state.MODEL)
+        )
+
+    if state.provider == PROVIDER_OPENCODE:
+        if not interactive and not _has_opencode_key():
+            return _none_or_arkad(interactive=interactive, preferred_model=preferred_model)
+        for attempt in range(DEFAULT_RETRIES):
+            try:
+                c = _build_opencode_client()
+                return c
+            except Exception as e:
+                if "401" in str(e) or "unauthorized" in str(e).lower():
+                    from ..constants import OPENCODE_KEY_FILE
+                    OPENCODE_KEY_FILE.unlink(missing_ok=True)
+                    prompt_for_opencode_key(
+                        reason="Stored OpenCode key rejected. Please re-enter."
+                    )
+                    continue
+                raise
+        console.print("[red]Too many OpenCode auth failures[/]"); sys.exit(1)
+
+    if state.provider == PROVIDER_OPENCODE_ZEN:
+        use_free = state.arkad_agent_free or should_use_arkad_agent_client(state.MODEL)
+        if not interactive and not use_free and not _has_opencode_zen_key():
+            return _none_or_arkad(interactive=interactive, preferred_model=preferred_model)
+        for attempt in range(DEFAULT_RETRIES):
+            try:
+                c = _build_opencode_zen_client_for_model(state.MODEL)
+                return c
+            except Exception as e:
+                if not use_free and ("401" in str(e) or "unauthorized" in str(e).lower()):
+                    OPENCODE_ZEN_KEY_FILE.unlink(missing_ok=True)
+                    prompt_for_opencode_zen_key(
+                        reason="Stored OpenCode Zen key rejected. Please re-enter."
+                    )
+                    continue
+                raise
+        if use_free:
+            console.print("[red]Arkad Agent connection failed[/]"); sys.exit(1)
+        console.print("[red]Too many OpenCode Zen auth failures[/]"); sys.exit(1)
+
+    if is_catalog_provider(state.provider):
+        # A provider from models.dev. Nothing here is fatal: a missing key,
+        # URL variable or catalog entry lands on the free tier, and the saved
+        # choice is kept so the next start tries it again.
+        if interactive and not _has_catalog_key(state.provider):
+            prompt_for_catalog_key(state.provider)
+        try:
+            return _build_catalog_client(state.provider)
+        except Exception as e:
+            console.print(f"[yellow]{e} — using the free Arkad Agent for now[/]")
+            return _fallback_arkad_agent_client(preferred_model=arkad_agent_default_model())
+
+    if state.provider == PROVIDER_OPENAI_CODEX:
+        state.auth_mode = AUTH_OAUTH
+        _secure_write(AUTH_MODE_FILE, AUTH_OAUTH)
+        c = _build_codex_client()
+        if c is None:
+            if not interactive:
+                return _none_or_arkad(interactive=interactive, preferred_model=preferred_model)
+            console.print(
+                "[yellow]OpenAI Codex OAuth not configured — run /login to sign in[/]"
+            )
+            if not _retried:
+                fallback = _pick_fallback_provider(interactive=interactive)
+                if fallback:
+                    state.provider = fallback
+                    _secure_write(PROVIDER_FILE, state.provider)
+                    return make_client(interactive=interactive, _retried=True)
+            console.print("[red]No fallback auth configured[/]")
+            sys.exit(1)
+        for attempt in range(DEFAULT_RETRIES):
+            try:
+                return c
+            except Exception as e:
+                if "401" in str(e) or "unauthorized" in str(e).lower():
+                    from .codex_oauth_tokens import clear_codex_oauth_tokens
+                    clear_codex_oauth_tokens()
+                    console.print("[yellow]Codex OAuth session invalid — run /login[/]")
+                    c = _build_codex_client()
+                    if c is None:
+                        break
+                    continue
+                raise
+        console.print("[red]Too many OpenAI Codex auth failures[/]"); sys.exit(1)
+
+    if state.provider == PROVIDER_OPENROUTER:
+        if not interactive and not _has_openrouter_key():
+            return _none_or_arkad(interactive=interactive, preferred_model=preferred_model)
+        for attempt in range(DEFAULT_RETRIES):
+            try:
+                c = _build_openrouter_client()
+                # Skip cheap validation: OpenRouter's /v1/models schema differs
+                # from Anthropic's and would break client.models.list(). The
+                # first real /v1/messages call will surface any 401.
+                return c
+            except APIStatusError as e:
+                if e.status_code == 401:
+                    OPENROUTER_KEY_FILE.unlink(missing_ok=True)
+                    prompt_for_openrouter_key(
+                        reason="Stored OpenRouter key rejected (401). Please re-enter."
+                    )
+                    continue
+                raise
+            except APIConnectionError as e:
+                console.print(f"[red]Network error: {e}[/]"); sys.exit(1)
+        console.print("[red]Too many OpenRouter auth failures[/]"); sys.exit(1)
+
+    # ── Anthropic path (preserved from original flow) ──
+    mode = _resolve_auth_mode(interactive=interactive)
+    if mode is None:
+        return _none_or_arkad(interactive=interactive, preferred_model=preferred_model)
+    state.auth_mode = mode
+    _secure_write(AUTH_MODE_FILE, state.auth_mode)
+
+    for attempt in range(DEFAULT_RETRIES):
+        try:
+            c = _build_client_from_mode(state.auth_mode, interactive=interactive)
+            c.models.list(limit=1)  # cheap validation
+            if state.provider == PROVIDER_ANTHROPIC:
+                if interactive:
+                    sync_anthropic_model_ids(c)
+                else:
+                    defer_anthropic_model_sync(c)
+            return c
+        except RuntimeError:
+            if not interactive:
+                return _none_or_arkad(interactive=interactive, preferred_model=preferred_model)
+            raise
+        except APIStatusError as e:
+            if e.status_code == 401:
+                if state.auth_mode == AUTH_OAUTH:
+                    tokens = load_oauth_tokens()
+                    if tokens and oauth_refresh(tokens):
+                        console.print("[dim]refreshed OAuth token, retrying…[/]")
+                        continue
+                    console.print("[yellow]OAuth session invalid — re-login required.[/]")
+                    clear_oauth_tokens()
+                    if not interactive:
+                        return _none_or_arkad(interactive=interactive, preferred_model=preferred_model)
+                    oauth_login()
+                    continue
+                else:
+                    KEY_FILE.unlink(missing_ok=True)
+                    if not interactive:
+                        return _none_or_arkad(interactive=interactive, preferred_model=preferred_model)
+                    prompt_for_key(reason="Stored Anthropic key rejected (401). Please re-enter.")
+                    continue
+            raise
+        except APIConnectionError as e:
+            console.print(f"[red]Network error: {e}[/]"); sys.exit(1)
+    if not interactive:
+        return _fallback_arkad_agent_client(preferred_model=preferred_model)
+    console.print("[red]Too many auth failures[/]"); sys.exit(1)

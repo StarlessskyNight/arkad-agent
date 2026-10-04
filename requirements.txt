@@ -1,0 +1,23 @@
+# Arkad — verified development setup (Python 3.10+)
+# Run from the repository root, one command at a time:
+#
+#   python3 -m venv .venv
+#   source .venv/bin/activate          # Windows: .venv\Scripts\activate
+#   pip install -e .                   # installs package + deps below; registers `arkad`
+#   arkad --help                      # verify CLI
+#   pip install pytest                 # test runner (not required to run the agent)
+#   python -m pytest tests/ -q         # full unit test suite
+#
+# `pip install -r requirements.txt` installs only the libraries listed below.
+# It does not register the `arkad` command — use `pip install -e .` for local dev.
+
+# Keep in sync with pyproject.toml (upper bounds: see the note there).
+anthropic>=0.40,<1
+httpx>=0.23,<1
+rich>=13
+textual>=8.2
+pypdf>=4.0
+openpyxl>=3.0
+openai>=1.0,<3
+mcp>=1.12.0,<2
+qrcode>=7.4

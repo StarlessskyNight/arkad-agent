@@ -1,0 +1,175 @@
+import unittest
+import tempfile
+from pathlib import Path
+from unittest import mock
+
+from arkad import state
+from arkad.auth.opencode_client import _opencode_reasoning_options
+from arkad.commands.control import _handle_think
+from arkad.tui.app import _is_think_picker_command
+
+
+class OpenCodeThinkingOptionsTests(unittest.TestCase):
+    def test_think_on_uses_provider_accepted_effort(self):
+        options = _opencode_reasoning_options("kimi-k2.6", {"type": "enabled", "effort": "high"})
+
+        self.assertEqual(options["reasoning_effort"], "high")
+        self.assertNotIn("extra_body", options)
+
+    def test_think_on_uses_selected_effort(self):
+        # xhigh/minimal are Arkad-internal labels clamped to valid API values.
+        expected = {"xhigh": "high", "high": "high", "medium": "medium", "low": "low", "minimal": "low"}
+        for effort, want in expected.items():
+            with self.subTest(effort=effort):
+                options = _opencode_reasoning_options("kimi-k2.6", {"type": "enabled", "effort": effort})
+
+                self.assertEqual(options["reasoning_effort"], want)
+
+    def test_invalid_enabled_effort_falls_back_to_high(self):
+        options = _opencode_reasoning_options("kimi-k2.6", {"type": "enabled", "effort": "max"})
+
+        self.assertEqual(options["reasoning_effort"], "high")
+
+    def test_think_off_disables_reasoning_for_go_and_zen_models(self):
+        for model in ("kimi-k2.6", "deepseek-v4-flash", "nemotron-3-ultra-free", "mimo-v2.5-free"):
+            with self.subTest(model=model):
+                options = _opencode_reasoning_options(model, {"type": "disabled"})
+
+                self.assertEqual(options["reasoning_effort"], "none")
+                self.assertNotIn("extra_body", options)
+
+    def test_missing_thinking_does_not_add_reasoning_options(self):
+        self.assertEqual(_opencode_reasoning_options("kimi-k2.6", None), {})
+
+    def test_think_command_sets_effort_and_mode(self):
+        old_mode = state.think_mode
+        old_effort = state.think_effort
+        try:
+            with mock.patch("arkad.commands.control.header_panel"), \
+                    mock.patch.object(state, "save_think_config"):
+                _handle_think("low")
+                self.assertTrue(state.think_mode)
+                self.assertEqual(state.think_effort, "low")
+
+                _handle_think("none")
+                self.assertFalse(state.think_mode)
+                self.assertEqual(state.think_effort, "none")
+
+                _handle_think("on")
+                self.assertTrue(state.think_mode)
+                self.assertEqual(state.think_effort, "high")
+        finally:
+            state.think_mode = old_mode
+            state.think_effort = old_effort
+
+    def test_think_mode_command_is_picker_alias_without_state_change(self):
+        old_mode = state.think_mode
+        old_effort = state.think_effort
+        try:
+            state.think_mode = True
+            state.think_effort = "medium"
+            with mock.patch("arkad.commands.control.console.print") as mocked_print, \
+                    mock.patch("arkad.commands.control.header_panel"), \
+                    mock.patch.object(state, "save_think_config"):
+                _handle_think("mode")
+
+            mocked_print.assert_called_once()
+            self.assertTrue(state.think_mode)
+            self.assertEqual(state.think_effort, "medium")
+        finally:
+            state.think_mode = old_mode
+            state.think_effort = old_effort
+
+    def test_tui_detects_think_picker_command(self):
+        self.assertTrue(_is_think_picker_command("/think mode"))
+        self.assertTrue(_is_think_picker_command("/think select"))
+        self.assertFalse(_is_think_picker_command("/think high"))
+
+    def test_think_config_persists_effort(self):
+        from arkad.constants import THINK_CONFIG_FILE
+        old_mode = state.think_mode
+        old_effort = state.think_effort
+        old_config = THINK_CONFIG_FILE
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                THINK_CONFIG_FILE = Path(temp_dir) / "think_config.json"
+                state.think_mode = True
+                state.think_effort = "medium"
+                state.save_think_config()
+
+                state.think_mode = False
+                state.think_effort = "high"
+                state._reload_saved_think()
+
+                self.assertTrue(state.think_mode)
+                self.assertEqual(state.think_effort, "medium")
+        finally:
+            THINK_CONFIG_FILE = old_config
+            state.think_mode = old_mode
+            state.think_effort = old_effort
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+# ── an upstream that refuses reasoning_effort (fledge-alpha / space-bunny free) ──
+
+class _BadRequest(Exception):
+    status_code = 400
+
+
+class _EmptyStream:
+    def __iter__(self):
+        return iter(())
+
+    def close(self):
+        pass
+
+
+def _stream_once(client, fail, calls):
+    from arkad.auth.opencode_client import _OpenCodeMessages
+
+    def fake(self, **kw):
+        calls.append(dict(kw))
+        if fail(kw):
+            raise _BadRequest("Error code: 400 - {'error': {'type': 'invalid_request_error'}}")
+        return _EmptyStream()
+
+    with mock.patch.object(_OpenCodeMessages, "_create_completion", fake):
+        with client.messages.stream(model="space-bunny-free", tools=[], thinking={"type": "disabled"},
+                                    messages=[{"role": "user", "content": "hi"}]) as s:
+            s.get_final_message()
+
+
+def _free_tier_client():
+    from arkad.auth.arkad_agent import build_arkad_agent_client
+
+    return build_arkad_agent_client()
+
+
+def _tool_names(kw):
+    return sorted(t["function"]["name"] for t in kw.get("tools") or [])
+
+
+def test_refused_effort_is_retried_without_it_and_not_sent_again():
+    """Thinking off sends reasoning_effort "none"; some free models 400 it (prompt
+    enhance always failed on them). Retry without it — tools kept — and remember."""
+    client, calls = _free_tier_client(), []
+    _stream_once(client, lambda kw: "reasoning_effort" in kw, calls)
+    assert [c.get("reasoning_effort") for c in calls] == ["none", None]
+    assert _tool_names(calls[1]) == ["bash", "read"]  # the free tier's gate stays
+    calls.clear()
+    _stream_once(client, lambda kw: "reasoning_effort" in kw, calls)
+    assert len(calls) == 1 and "reasoning_effort" not in calls[0]
+
+
+def test_free_tier_never_retries_without_its_gate_tools():
+    """Dropping tools on the free tier only ever got a 403 FreeTierError, which
+    hid the real error."""
+    import pytest
+
+    client, calls = _free_tier_client(), []
+    with pytest.raises(_BadRequest):
+        _stream_once(client, lambda kw: True, calls)
+    assert calls and all(_tool_names(c) == ["bash", "read"] for c in calls)

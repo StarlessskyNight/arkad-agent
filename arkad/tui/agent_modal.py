@@ -1,0 +1,470 @@
+"""Centered agent control modal — one place for every agent action.
+
+User interaction:
+
+* ↑/↓        navigate the agent list
+* Enter      activate the highlighted agent (or pick "default" to deactivate);
+             on a hidden global agent it turns global agents on first
+
+Each row is tagged with the tool it comes from (arkad, claude, cursor, …),
+``+N`` when other tools have an agent of the same name.
+* i          import the highlighted global agent into this project
+* x          export the highlighted project agent to your global config
+* o          deactivate — base system prompt only
+* g          toggle global scope (project-only ↔ project + global)
+* s          toggle which scope `new` writes to (project ↔ global)
+* n          create a new agent (opens a name-input sub-modal)
+* e          open the highlighted agent's .md file in $EDITOR
+* p          preview the highlighted agent's body in the transcript
+* r          re-scan disk
+* Esc        close
+
+Designed to make ``/agent`` the only agent command a user ever needs.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import CenterMiddle, Vertical
+from textual.widgets import Input, OptionList, Static
+from textual.widgets.option_list import Option
+
+
+from ..storage import agents as ag
+from ..commands import agent as agent_cmd
+from .. import state
+from .modal_chrome import (
+    TUI_MODAL_CHROME_CSS,
+    TuiModalScreen,
+    ROW_NAME_WIDTH,
+    empty_row,
+    hint_line,
+    picker_row,
+    section_header,
+)
+from .mouse_toggle import enable_mouse, disable_mouse
+from . import theme as ui
+from ..utils.origins import tool_icon, tool_tag, tools_in
+
+
+_OFF_ID = "__off__"
+_HIDDEN = "hidden::"   # option-id prefix: a global agent while global agents are off
+
+
+# ── new-agent sub-modal ──────────────────────────────────────────────────
+
+
+class _NewAgentScreen(TuiModalScreen[tuple[str, str] | None]):
+    """Tiny input modal that collects (name, description) for `/agent new`."""
+
+    DEFAULT_CSS = (
+        TUI_MODAL_CHROME_CSS
+        + """
+    _NewAgentScreen #modal {
+        width: 60%;
+        max-width: 80;
+        max-height: 50%;
+    }
+    _NewAgentScreen #newagent_name_label,
+    _NewAgentScreen #newagent_desc_label {
+        color: {ui.FG_MUTE};
+        padding: 0 1;
+    }
+    _NewAgentScreen #newagent_desc_label { margin-top: 1; }
+    """
+    )
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=True)]
+
+    def __init__(self, scope: str) -> None:
+        super().__init__()
+        self._scope = scope
+
+    def compose(self) -> ComposeResult:
+        with CenterMiddle():
+            with Vertical(id="modal"):
+                yield Static(
+                    f"➕  New Agent   [{ui.FG_DIM}]writes to {self._scope} scope[/]",
+                    id="modal_title",
+                )
+                yield Static(
+                    f"Name  [{ui.FG_DIM}](lowercase-kebab — e.g. python-debugger)[/]",
+                    id="newagent_name_label",
+                )
+                yield Input(placeholder="agent-name", id="newagent_name")
+                yield Static(
+                    f"Description  [{ui.FG_DIM}](one line)[/]",
+                    id="newagent_desc_label",
+                )
+                yield Input(placeholder="what this agent does", id="newagent_desc")
+                yield Static(
+                    f"[bold {ui.FG_MUTE}]↵[/] on description to create   [bold {ui.FG_MUTE}]esc[/] cancel",
+                    id="modal_hint",
+                )
+
+    def on_mount(self) -> None:
+        self.query_one("#newagent_name", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "newagent_name":
+            self.query_one("#newagent_desc", Input).focus()
+            return
+        name = self.query_one("#newagent_name", Input).value.strip()
+        desc = self.query_one("#newagent_desc", Input).value.strip()
+        if not name:
+            return
+        self.dismiss((name, desc))
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+# ── main agent control modal ─────────────────────────────────────────────
+
+
+class AgentPickerScreen(TuiModalScreen[dict | str | None]):
+    """One-stop control panel for agents.
+
+    Dismiss values:
+        - dict   → an agent record (caller activates it)
+        - "off"  → user picked "default" / deactivate
+        - None   → cancelled
+    """
+
+    DEFAULT_CSS = (
+        TUI_MODAL_CHROME_CSS
+        + """
+    AgentPickerScreen #modal {
+        width: 80%;
+        max-width: 120;
+        max-height: 85%;
+    }
+    AgentPickerScreen OptionList {
+        height: 1fr;
+        min-height: 12;
+    }
+    """
+    )
+
+    BINDINGS = [
+        Binding("escape", "dismiss_cancel", "Cancel", show=True),
+        Binding("down", "cursor_down", show=False),
+        Binding("up", "cursor_up", show=False),
+        Binding("g", "toggle_global", "Global", show=True),
+        Binding("i", "import_to_project", "Import", show=True),
+        Binding("x", "export_to_global", "Export", show=True),
+        Binding("s", "toggle_new_scope", "Scope", show=True),
+        Binding("n", "new_agent", "New", show=True),
+        Binding("e", "edit_agent", "Edit", show=True),
+        Binding("p", "preview_agent", "Preview", show=True),
+        Binding("r", "refresh", "Refresh", show=True),
+        Binding("o", "deactivate", "Default", show=True),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with CenterMiddle():
+            with Vertical(id="modal"):
+                yield Static("◈  Agents", id="modal_title")
+                yield Static("", id="modal_status")
+                yield OptionList(id="agent_list")
+                yield Static(
+                    hint_line(("↵", "activate"), ("o", "default"), ("n", "new"), ("e", "edit"),
+                              ("p", "preview"), ("g", "global"), ("s", "scope"),
+                              ("i/x", "import/export"), ("esc", "close")),
+                    id="modal_hint",
+                )
+
+    def on_mount(self) -> None:
+        enable_mouse()
+        try:
+            self._prev_scroll_y = self.app.scroll_sensitivity_y
+            self.app.scroll_sensitivity_y = 1.0
+        except AttributeError:
+            self._prev_scroll_y = None
+        self._populate()
+
+    def on_unmount(self) -> None:
+        disable_mouse()
+        if self._prev_scroll_y is not None:
+            try:
+                self.app.scroll_sensitivity_y = self._prev_scroll_y
+            except AttributeError:
+                pass
+
+    # ── content ────────────────────────────────────────────────────────────
+
+    def _populate(self) -> None:
+        opts = self.query_one("#agent_list", OptionList)
+        opts.clear_options()
+        active = state.active_agent_name
+
+        # "default" row (no agent → base system prompt)
+        opts.add_option(Option(
+            picker_row("default", detail="base system prompt only", active=not active,
+                       icon="·", title_width=ROW_NAME_WIDTH),
+            id=_OFF_ID,
+        ))
+
+        agents = ag.discover_agents(force=True)
+        hidden: list[dict] = []
+        if not state.global_agents:
+            shown = {a["name"] for a in agents}
+            hidden = [a for a in ag.discover_agents(force=True, include_global=True)
+                      if a["name"] not in shown]
+        if not agents and not hidden:
+            opts.add_option(empty_row(
+                "No agents yet — press n to create one, or drop files in .arkad/agents/"
+            ))
+            opts.highlighted = 0
+            opts.focus()
+            self._refresh_status()
+            return
+
+        project = [a for a in agents if a.get("scope") == "project"]
+        glob = [a for a in agents if a.get("scope") == "global"]
+
+        if project:
+            opts.add_option(section_header("Project", " · ".join(tools_in(project))))
+            for a in project:
+                opts.add_option(Option(_format_agent_row(a, active), id=a["name"]))
+
+        if glob:
+            opts.add_option(section_header("Global", " · ".join(tools_in(glob))))
+            for a in glob:
+                opts.add_option(Option(_format_agent_row(a, active), id=a["name"]))
+
+        if hidden:
+            opts.add_option(section_header(
+                "Global", f"{' · '.join(tools_in(hidden))} — off: ↵ or g turns global agents on",
+                note_style=ui.WARN))
+            for a in hidden:
+                opts.add_option(Option(_format_agent_row(a, active, hidden=True), id=_HIDDEN + a["name"]))
+
+        self._highlight_active()
+        opts.focus()
+        self._refresh_status()
+
+    def _refresh_status(self) -> None:
+        scope = "project + global" if state.global_agents else "project-only"
+        new_scope = agent_cmd.get_new_scope()
+        count = len(ag.discover_agents())
+        active = state.active_agent_name or "default"
+        try:
+            self.query_one("#modal_title", Static).update(
+                f"◈  Agents   [{ui.FG_DIM}]{count} available · scope: {scope}[/]"
+            )
+            self.query_one("#modal_status", Static).update(
+                f"active: [bold {ui.ACCENT}]{active}[/]   ·   new writes to: [bold {ui.FG}]{new_scope}[/]"
+            )
+        except Exception:
+            pass
+
+    def _highlight_active(self) -> None:
+        opts = self.query_one("#agent_list", OptionList)
+        target = state.active_agent_name or _OFF_ID
+        for idx in range(opts.option_count):
+            try:
+                opt = opts.get_option_at_index(idx)
+            except Exception:
+                continue
+            if getattr(opt, "id", None) == target:
+                opts.highlighted = idx
+                return
+        opts.highlighted = 0
+
+    def _current_agent_name(self) -> str | None:
+        """Return the ID of the highlighted row (or None for placeholders)."""
+        opts = self.query_one("#agent_list", OptionList)
+        if opts.highlighted is None:
+            return None
+        try:
+            opt = opts.get_option_at_index(opts.highlighted)
+        except Exception:
+            return None
+        oid = getattr(opt, "id", None)
+        if not oid or oid == _OFF_ID:
+            return None
+        return oid.removeprefix(_HIDDEN)
+
+    # ── bindings ───────────────────────────────────────────────────────────
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        oid = event.option.id
+        if oid == _OFF_ID:
+            self.dismiss("off")
+            return
+        if not oid:
+            self.dismiss(None)
+            return
+        if oid.startswith(_HIDDEN):
+            # One step instead of "press g, find it again, press Enter".
+            oid = oid.removeprefix(_HIDDEN)
+            state.global_agents = True
+            state.save_agent_config()
+            ag.invalidate_cache()
+            self.app.notify("Global agents turned on", timeout=3)
+        rec = ag.find_agent(oid)
+        if rec is None:
+            self.dismiss(None)
+            return
+        self.dismiss(rec)
+
+    def action_dismiss_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_cursor_down(self) -> None:
+        self.query_one("#agent_list", OptionList).action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        self.query_one("#agent_list", OptionList).action_cursor_up()
+
+    def action_toggle_global(self) -> None:
+        state.global_agents = not state.global_agents
+        state.save_agent_config()
+        ag.invalidate_cache()
+        self._populate()
+
+    def action_import_to_project(self) -> None:
+        name = self._current_agent_name()
+        if not name:
+            self._notify("(highlight a global agent to import)")
+            return
+        result = ag.import_agent_to_project(name)
+        if result.get("error"):
+            self._notify(str(result["error"]), error=True)
+            return
+        ag.invalidate_cache()
+        self._populate()
+        if result.get("added"):
+            self._notify(f"imported {name} → {result['path']}")
+        elif result.get("skipped"):
+            self._notify(f"{name} already in project")
+        else:
+            self._notify("nothing to import", error=True)
+
+    def action_export_to_global(self) -> None:
+        name = self._current_agent_name()
+        if not name:
+            self._notify("(highlight a project agent to export)")
+            return
+        result = ag.export_agent_to_global(name)
+        if result.get("error"):
+            self._notify(str(result["error"]), error=True)
+            return
+        ag.invalidate_cache()
+        self._populate()
+        if result.get("added"):
+            self._notify(f"exported {name} → {result['path']}")
+        elif result.get("skipped"):
+            self._notify(f"{name} already in global")
+        else:
+            self._notify("nothing to export", error=True)
+
+    def action_refresh(self) -> None:
+        ag.invalidate_cache()
+        self._populate()
+
+    def action_deactivate(self) -> None:
+        self.dismiss("off")
+
+    def action_toggle_new_scope(self) -> None:
+        cur = agent_cmd.get_new_scope()
+        agent_cmd.set_new_scope("global" if cur == "project" else "project")
+        self._refresh_status()
+
+    def action_new_agent(self) -> None:
+        scope = agent_cmd.get_new_scope()
+
+        def after(result: tuple[str, str] | None) -> None:
+            if not result:
+                return
+            name, desc = result
+            ok, msg = ag.scaffold_agent(name, scope=scope, description=desc)
+            if not ok:
+                self._notify(f"✗ {msg}", error=True)
+                return
+            ag.invalidate_cache()
+            self._populate()
+            # Try to open the new file in $EDITOR.
+            editor = os.environ.get("EDITOR")
+            if editor:
+                try:
+                    subprocess.Popen([editor, msg])
+                except Exception:
+                    pass
+            self._notify(f"✓ created {msg}")
+
+        self.app.push_screen(_NewAgentScreen(scope=scope), after)
+
+    def action_edit_agent(self) -> None:
+        name = self._current_agent_name()
+        if not name:
+            self._notify("(highlight an agent to edit)")
+            return
+        rec = ag.find_agent(name)
+        if not rec:
+            self._notify(f"agent '{name}' not found", error=True)
+            return
+        editor = os.environ.get("EDITOR")
+        if not editor:
+            self._notify(f"$EDITOR not set — file: {rec['path']}", error=True)
+            return
+        try:
+            subprocess.Popen([editor, rec["path"]])
+            self._notify(f"opened {rec['path']} in $EDITOR")
+        except Exception as e:
+            self._notify(f"could not launch $EDITOR: {e}", error=True)
+
+    def action_preview_agent(self) -> None:
+        name = self._current_agent_name()
+        if not name:
+            self._notify("(highlight an agent to preview)")
+            return
+        body = ag.load_agent_body(name) or ""
+        try:
+            from rich.panel import Panel
+            from rich.markdown import Markdown
+            log = self.app.query_one("#transcript")
+            log.write(Panel(
+                Markdown(body or "*(empty body)*"),
+                title=f"⚙  Agent preview: {name}",
+                border_style="cyan",
+            ), expand=True)
+            self._notify(f"previewed '{name}' in transcript")
+        except Exception as e:
+            self._notify(f"preview failed: {e}", error=True)
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    def _notify(self, msg: str, error: bool = False) -> None:
+        try:
+            color = ui.ERR if error else ui.OK
+            self.query_one("#modal_status", Static).update(f"[{color}]{msg}[/]")
+        except Exception:
+            pass
+
+
+def _format_agent_row(agent: dict, active_name: str, *, hidden: bool = False):
+    is_active = agent["name"] == active_name
+    icon = (agent.get("icon") or "").strip() or "·"
+    color = (agent.get("color") or "").strip() or ui.ACCENT
+    tool = agent.get("tool") or "arkad"
+    right = f"{tool_icon(tool)} {tool_tag(tool, agent.get('also') or ())}"
+    if agent.get("model"):
+        right = f"{agent['model']} · {right}"
+    if hidden:
+        right += " · off"
+    return picker_row(
+        agent["name"],
+        detail=agent.get("description", ""),
+        active=is_active,
+        icon=icon,
+        icon_style=ui.FG_DIM if hidden else color,
+        title_style=ui.FG_DIM if hidden else (f"bold {color}" if is_active else color),
+        detail_style=ui.FG_DIM if hidden else None,
+        title_width=ROW_NAME_WIDTH,
+        right=right,
+    )

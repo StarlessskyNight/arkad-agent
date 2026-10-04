@@ -1,0 +1,810 @@
+/* Tokens, base, backdrop and shared glass primitives.
+ *
+ * Look: pure black, near-black glass panels with hairline borders, rounded
+ * icon tiles, white primary actions and one green accent for "live / on".
+ * Glass has three weights: .glass (chrome: sidebar, top bar, composer),
+ * .glass-strong (dialogs, menus) and plain translucent card fills for
+ * transcript items (real blur on every message would stutter on phones).
+ */
+:root {
+  color-scheme: dark;
+  --bg: #000000;
+  --green: #4ade80;
+  --green-deep: #22c55e;
+  --amber: #fbbf24;
+  --red: #f87171;
+
+  --text: #fafafa;
+  --text-2: #a3a3a3;
+  --text-3: #737373;
+
+  --glass: rgba(10, 10, 10, 0.66);
+  --glass-strong: rgba(14, 14, 14, 0.86);
+  --card: rgba(255, 255, 255, 0.03);
+  --card-hover: rgba(255, 255, 255, 0.055);
+  --card-sunk: rgba(0, 0, 0, 0.45);
+  --tile: linear-gradient(180deg, #171717, #0c0c0c);
+  --line: rgba(255, 255, 255, 0.085);
+  --line-2: rgba(255, 255, 255, 0.15);
+  --highlight: rgba(255, 255, 255, 0.05);
+  --focus: rgba(var(--accent-rgb), 0.55);
+
+  /* Theme accent (Appearance → Accent): only the rgb triplet + deep shade
+     change per accent; everything else derives from them. */
+  --accent-rgb: 74, 222, 128;
+  --accent-deep: #22c55e;
+  --on-accent: #ffffff;
+  --accent: rgb(var(--accent-rgb));
+  --accent-soft: rgba(var(--accent-rgb), 0.09);
+  --accent-line: rgba(var(--accent-rgb), 0.32);
+  --ok: var(--green);
+  --ok-soft: rgba(74, 222, 128, 0.1);
+  --warn: var(--amber);
+  --warn-soft: rgba(251, 191, 36, 0.1);
+  --warn-line: rgba(251, 191, 36, 0.32);
+  --danger: var(--red);
+  --danger-soft: rgba(248, 113, 113, 0.1);
+  --danger-line: rgba(248, 113, 113, 0.35);
+
+  --primary-bg: #fafafa;
+  --primary-hover: #ffffff;
+  --primary-fg: #0a0a0a;
+
+  --you-fill: rgba(255, 255, 255, 0.07);
+  --you-line: rgba(255, 255, 255, 0.13);
+  --code-bg: #070707;
+  --code-line: rgba(255, 255, 255, 0.08);
+  --code-text: #e5e5e5;
+  --code-dim: #8a8a8a;
+
+  --blur: 20px;
+  --blur-strong: 28px;
+  --shadow: 0 16px 40px -20px rgba(0, 0, 0, 0.9);
+  --shadow-lg: 0 30px 80px -24px rgba(0, 0, 0, 0.95);
+
+  --r-panel: 20px;
+  --r-card: 16px;
+  --r-row: 12px;
+  --r-pill: 999px;
+
+  --font-display: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-ui: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f6f5;
+  --green: #16a34a;
+  --green-deep: #15803d;
+  --amber: #b45309;
+  --red: #dc2626;
+
+  --text: #0a0a0a;
+  --text-2: #525252;
+  --text-3: #8a8a8a;
+
+  --glass: rgba(255, 255, 255, 0.7);
+  --glass-strong: rgba(255, 255, 255, 0.9);
+  --card: rgba(255, 255, 255, 0.75);
+  --card-hover: #ffffff;
+  --card-sunk: rgba(0, 0, 0, 0.035);
+  --tile: linear-gradient(180deg, #ffffff, #f2f2f1);
+  --line: rgba(0, 0, 0, 0.08);
+  --line-2: rgba(0, 0, 0, 0.15);
+  --highlight: rgba(255, 255, 255, 0.9);
+  --focus: rgba(var(--accent-rgb), 0.5);
+
+  --accent-rgb: 22, 163, 74;
+  --accent-deep: #15803d;
+  --ok-soft: rgba(22, 163, 74, 0.09);
+  --warn-soft: rgba(180, 83, 9, 0.08);
+  --warn-line: rgba(180, 83, 9, 0.28);
+  --danger-soft: rgba(220, 38, 38, 0.07);
+  --danger-line: rgba(220, 38, 38, 0.3);
+
+  --primary-bg: #0a0a0a;
+  --primary-hover: #262626;
+  --primary-fg: #fafafa;
+
+  --you-fill: #ffffff;
+  --you-line: rgba(0, 0, 0, 0.1);
+  --code-bg: #0b0b0b;
+  --code-line: rgba(255, 255, 255, 0.08);
+
+  --shadow: 0 14px 34px -20px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 30px 70px -28px rgba(0, 0, 0, 0.35);
+}
+
+/* Soft light: warm paper instead of near-white — lifted, low-glare surfaces
+   and a softer ink, at lower contrast than Light. It wears data-theme
+   "light" (so every light rule below and in the other sheets applies) plus
+   data-variant "soft"; only the surface, ink and shadow tokens change.
+   Higher specificity than the light block, so these win without reordering. */
+:root[data-theme="light"][data-variant="soft"] {
+  --bg: #f4f1ea;
+
+  --text: #2b2a26;
+  --text-2: #5f5b53;
+  --text-3: #8d887e;
+
+  --glass: rgba(255, 254, 250, 0.72);
+  --glass-strong: rgba(255, 254, 250, 0.92);
+  --card: rgba(255, 254, 250, 0.72);
+  --card-hover: #fffefb;
+  --card-sunk: rgba(70, 60, 40, 0.05);
+  --tile: linear-gradient(180deg, #fffefb, #f0ede5);
+  --line: rgba(60, 54, 42, 0.1);
+  --line-2: rgba(60, 54, 42, 0.18);
+  --highlight: rgba(255, 255, 255, 0.9);
+
+  --you-fill: #fffefb;
+  --you-line: rgba(60, 54, 42, 0.12);
+  --code-bg: #1f1e1a;
+  --code-line: rgba(255, 255, 255, 0.08);
+
+  --shadow: 0 14px 34px -20px rgba(60, 50, 30, 0.22);
+  --shadow-lg: 0 30px 70px -28px rgba(60, 50, 30, 0.32);
+}
+
+/* Soft dark: charcoal instead of pure black — lifted panels, gentler
+   contrast, same accents as Dark. Only the surfaces and text change. */
+:root[data-theme="dim"] {
+  --bg: #1c1d21;
+
+  --text: #ebebee;
+  --text-2: #b1b2b9;
+  --text-3: #868790;
+
+  --glass: rgba(40, 41, 47, 0.62);
+  --glass-strong: rgba(44, 45, 52, 0.9);
+  --card: rgba(255, 255, 255, 0.045);
+  --card-hover: rgba(255, 255, 255, 0.075);
+  --card-sunk: rgba(0, 0, 0, 0.16);
+  --tile: linear-gradient(180deg, #313238, #27282d);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-2: rgba(255, 255, 255, 0.16);
+  --highlight: rgba(255, 255, 255, 0.06);
+
+  --you-fill: rgba(255, 255, 255, 0.085);
+  --you-line: rgba(255, 255, 255, 0.14);
+  --code-bg: #15161a;
+  --code-line: rgba(255, 255, 255, 0.08);
+
+  --shadow: 0 16px 40px -22px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 30px 70px -26px rgba(0, 0, 0, 0.7);
+}
+
+/* Accents — dark values first, then light-mode shades (darker for contrast). */
+:root[data-accent="blue"] { --accent-rgb: 96, 165, 250; --accent-deep: #3b82f6; }
+:root[data-accent="orange"] { --accent-rgb: 251, 146, 60; --accent-deep: #ea580c; }
+:root[data-accent="rose"] { --accent-rgb: 251, 113, 133; --accent-deep: #e11d48; }
+:root[data-accent="teal"] { --accent-rgb: 45, 212, 191; --accent-deep: #0d9488; }
+:root[data-accent="mono"] { --accent-rgb: 245, 245, 245; --accent-deep: #e5e5e5; --on-accent: #0a0a0a; }
+:root[data-theme="light"][data-accent="blue"] { --accent-rgb: 37, 99, 235; --accent-deep: #1d4ed8; }
+:root[data-theme="light"][data-accent="orange"] { --accent-rgb: 234, 88, 12; --accent-deep: #c2410c; }
+:root[data-theme="light"][data-accent="rose"] { --accent-rgb: 225, 29, 72; --accent-deep: #be123c; }
+:root[data-theme="light"][data-accent="teal"] { --accent-rgb: 13, 148, 136; --accent-deep: #0f766e; }
+:root[data-theme="light"][data-accent="mono"] { --accent-rgb: 23, 23, 23; --accent-deep: #171717; --on-accent: #ffffff; }
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+[hidden] { display: none !important; }
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+::selection { background: rgba(var(--accent-rgb), 0.3); color: var(--text); }
+
+* { scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: 99px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track { background: transparent; }
+
+code, kbd, pre { font-family: var(--font-mono); }
+
+kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 -1px 0 var(--line);
+}
+
+/* ─── Backdrop ──────────────────────────────────────────────────────── */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--bg);
+}
+
+/* One soft green light above the page; it brightens while Arkad works. */
+.glow {
+  position: absolute;
+  top: -38vh;
+  left: 50%;
+  width: min(1200px, 140vw);
+  height: 76vh;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(var(--accent-rgb), 0.11), rgba(var(--accent-rgb), 0.03) 55%, transparent);
+  opacity: 0.7;
+  transition: opacity 1.2s ease;
+}
+
+.grid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 70% 55% at 50% 0%, #000 20%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 55% at 50% 0%, #000 20%, transparent 75%);
+}
+
+:root[data-theme="light"] .glow { background: radial-gradient(closest-side, rgba(var(--accent-rgb), 0.1), transparent); }
+:root[data-theme="light"] .grid { background-image: radial-gradient(rgba(0, 0, 0, 0.08) 1px, transparent 1px); }
+:root[data-theme="dim"] .grid { background-image: radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px); }
+
+body.is-busy .glow { opacity: 1; animation: glowpulse 3.6s ease-in-out infinite; }
+body.is-offline .glow { opacity: 0.15; }
+
+@keyframes glowpulse { 50% { opacity: 0.72; } }
+
+/* ─── Frosted surface (Appearance → Frosted glass) ───────────────────────
+   Opt-in via data-surface="glass", so the default look is untouched.
+   It composes with soft contrast: the attribute is independent of
+   data-variant, so "light + soft + glass" all work together.
+
+   The rules that matter, and why the effect stays professional:
+     - The ambient mesh is a WHISPER (0.055-0.08 alpha). It exists so the
+       blur has something to refract, not to tint the UI. Anything stronger
+       and the whole app reads as a green/purple gradient wash.
+     - Surfaces stay dense and neutral. Glass in a dark UI is mostly an
+       opaque near-black; the translucency is subtle, never a colour cast.
+     - Depth comes from a specular hairline at the top edge plus a wide,
+       low-opacity shadow — never from a coloured halo.
+     - State dots lose their glow. Colour alone carries the state; a halo
+       around an 8px dot is what made the old UI look lit from inside. */
+:root[data-surface="glass"] {
+  --glass: rgba(18, 20, 25, 0.72);
+  --glass-strong: rgba(16, 18, 23, 0.86);
+  --card: rgba(255, 255, 255, 0.04);
+  --card-hover: rgba(255, 255, 255, 0.07);
+  --card-sunk: rgba(0, 0, 0, 0.32);
+  --tile: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.02));
+  --line: rgba(255, 255, 255, 0.1);
+  --line-2: rgba(255, 255, 255, 0.17);
+  --highlight: rgba(255, 255, 255, 0.12);
+  --grid-dot: rgba(255, 255, 255, 0.045);
+
+  --blur: 26px;
+  --blur-strong: 40px;
+  --sat: 150%;
+  --sat-strong: 170%;
+  /* The top bar and composer float over the transcript (layout.css), so
+     they get a thinner, lighter-blurred glass: at the panel density above,
+     white-on-black text underneath frosts to an invisible haze. */
+  --chrome: rgba(18, 20, 25, 0.62);
+  --chrome-blur: 14px;
+  --shadow: 0 18px 46px -24px rgba(0, 0, 0, 0.78);
+  --shadow-lg: 0 34px 90px -28px rgba(0, 0, 0, 0.84);
+
+  /* Ambient mesh: barely there. Dark themes get a cool neutral wash; the
+     accent barely registers so no mode turns green. */
+  --amb-1: color-mix(in oklab, var(--accent) 11%, transparent);
+  --amb-2: rgba(96, 130, 255, 0.11);
+  --amb-3: rgba(176, 110, 255, 0.085);
+}
+
+:root[data-surface="glass"][data-theme="dim"] {
+  --glass: rgba(40, 43, 51, 0.74);
+  --glass-strong: rgba(38, 41, 49, 0.88);
+  --card: rgba(255, 255, 255, 0.05);
+  --card-hover: rgba(255, 255, 255, 0.08);
+  --card-sunk: rgba(0, 0, 0, 0.24);
+  --tile: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025));
+  --line: rgba(255, 255, 255, 0.1);
+  --line-2: rgba(255, 255, 255, 0.17);
+  --highlight: rgba(255, 255, 255, 0.13);
+  --chrome: rgba(40, 43, 51, 0.66);
+  --amb-1: color-mix(in oklab, var(--accent) 11%, transparent);
+  --amb-2: rgba(96, 130, 255, 0.11);
+  --amb-3: rgba(176, 110, 255, 0.085);
+}
+
+/* Light glass is milky and bright. The specular edge flips to a dark
+   bottom lip — a bright top edge on white reads as a rendering bug. */
+:root[data-surface="glass"][data-theme="light"] {
+  --glass: rgba(255, 255, 255, 0.78);
+  --glass-strong: rgba(255, 255, 255, 0.9);
+  --card: rgba(255, 255, 255, 0.62);
+  --card-hover: rgba(255, 255, 255, 0.88);
+  --card-sunk: rgba(15, 20, 35, 0.05);
+  --tile: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.52));
+  --line: rgba(15, 20, 35, 0.09);
+  --line-2: rgba(15, 20, 35, 0.16);
+  --highlight: rgba(255, 255, 255, 0.95);
+  --grid-dot: rgba(15, 20, 35, 0.06);
+  --shadow: 0 16px 38px -22px rgba(20, 28, 50, 0.28);
+  --shadow-lg: 0 34px 76px -30px rgba(20, 28, 50, 0.36);
+  --chrome: rgba(255, 255, 255, 0.66);
+
+  --amb-1: color-mix(in oklab, var(--accent) 9%, transparent);
+  --amb-2: rgba(120, 150, 255, 0.13);
+  --amb-3: rgba(196, 140, 255, 0.1);
+}
+
+:root[data-surface="glass"][data-theme="light"][data-variant="soft"] {
+  --glass: rgba(255, 253, 248, 0.82);
+  --glass-strong: rgba(255, 253, 248, 0.92);
+  --card: rgba(255, 253, 248, 0.62);
+  --card-hover: rgba(255, 254, 250, 0.9);
+  --card-sunk: rgba(70, 60, 40, 0.06);
+  --tile: linear-gradient(180deg, rgba(255, 254, 250, 0.94), rgba(255, 254, 250, 0.55));
+  --line: rgba(60, 54, 42, 0.11);
+  --line-2: rgba(60, 54, 42, 0.19);
+  --grid-dot: rgba(60, 54, 42, 0.055);
+  --chrome: rgba(255, 253, 248, 0.7);
+
+  --amb-1: color-mix(in oklab, var(--accent) 8%, transparent);
+  --amb-2: rgba(150, 170, 230, 0.12);
+  --amb-3: rgba(220, 170, 200, 0.095);
+}
+
+/* The specular edge, per polarity. Applied via the token so the many
+   `inset 0 1px 0 var(--highlight)` call sites all pick it up at once. */
+:root[data-surface="glass"] {
+  --edge-specular: inset 0 1px 0 var(--highlight);
+}
+:root[data-surface="glass"][data-theme="light"] {
+  --edge-specular: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -1px 0 rgba(15, 20, 35, 0.05);
+}
+:root[data-surface="glass"][data-theme="light"][data-variant="soft"] {
+  --edge-specular: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -1px 0 rgba(60, 54, 42, 0.06);
+}
+
+/* Backdrop: three soft lights placed mostly off-screen, so they show as
+   light at the edges rather than colour behind the content. Each drifts on
+   its own slow loop (transform only: the compositor moves them, nothing
+   repaints), so the frost always has something alive to refract. The mesh
+   brightens while Arkad works and dims offline. Phones only drift while
+   a turn runs (battery); reduced motion stops it (the global rule below). */
+:root[data-surface="glass"] .glow {
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  transform: none;
+  border-radius: 0;
+  background: radial-gradient(60vw 40vh at 50% 110%, var(--amb-3), transparent 60%);
+  opacity: 0.8;
+  animation: drift-c 52s ease-in-out infinite alternate;
+  will-change: transform;
+}
+:root[data-surface="glass"] .glow::before,
+:root[data-surface="glass"] .glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+:root[data-surface="glass"] .glow::before {
+  background: radial-gradient(52vw 40vh at 4% -8%, var(--amb-1), transparent 58%);
+  animation: drift-a 46s ease-in-out infinite alternate;
+}
+:root[data-surface="glass"] .glow::after {
+  background: radial-gradient(48vw 38vh at 102% 2%, var(--amb-2), transparent 56%);
+  animation: drift-b 61s ease-in-out infinite alternate;
+}
+:root[data-surface="glass"] body.is-busy .glow { opacity: 1; }
+:root[data-surface="glass"] body.is-offline .glow { opacity: 0.3; }
+:root[data-surface="glass"] body.is-offline .glow,
+:root[data-surface="glass"] body.is-offline .glow::before,
+:root[data-surface="glass"] body.is-offline .glow::after { animation-play-state: paused; }
+
+@keyframes drift-a { to { transform: translate3d(10vw, 8vh, 0) scale(1.2); } }
+@keyframes drift-b { to { transform: translate3d(-12vw, 10vh, 0) scale(1.14); } }
+@keyframes drift-c { to { transform: translate3d(6vw, -7vh, 0) scale(1.1); } }
+
+@media (max-width: 960px), (pointer: coarse) {
+  :root[data-surface="glass"] body:not(.is-busy) .glow,
+  :root[data-surface="glass"] body:not(.is-busy) .glow::before,
+  :root[data-surface="glass"] body:not(.is-busy) .glow::after { animation-play-state: paused; }
+  /* Lighter blur: phones re-blur the chrome every frame while the
+     transcript scrolls under it. */
+  :root[data-surface="glass"] { --blur: 20px; --blur-strong: 30px; --chrome-blur: 12px; }
+}
+
+:root[data-surface="glass"] .grid {
+  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
+  background-size: 30px 30px;
+  mask-image: radial-gradient(ellipse 78% 60% at 50% 0%, #000 10%, transparent 72%);
+  -webkit-mask-image: radial-gradient(ellipse 78% 60% at 50% 0%, #000 10%, transparent 72%);
+}
+
+/* Backing off the neon: state reads by colour alone. */
+:root[data-surface="glass"] .status-dot,
+:root[data-surface="glass"] .now-dot::before {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+:root[data-surface="glass"] .status-pill.is-busy .status-dot,
+:root[data-surface="glass"] .status-pill.is-waiting .status-dot,
+:root[data-surface="glass"] .act-now.is-busy .now-dot::before,
+:root[data-surface="glass"] .act-now.is-waiting .now-dot::before,
+:root[data-surface="glass"] .typing-dot {
+  animation: breathe 1.4s ease-in-out infinite;
+}
+:root[data-surface="glass"] .mark::before {
+  box-shadow: none;
+}
+:root[data-surface="glass"] .mark {
+  box-shadow: var(--edge-specular), 0 8px 20px -12px rgba(0, 0, 0, 0.7);
+}
+:root[data-surface="glass"] .btn-primary {
+  box-shadow: 0 6px 18px -12px rgba(0, 0, 0, 0.6);
+}
+:root[data-surface="glass"][data-theme="light"] .btn-primary {
+  box-shadow: 0 6px 16px -10px rgba(0, 0, 0, 0.4);
+}
+:root[data-surface="glass"] .recent-row.is-active .rr-dot,
+:root[data-surface="glass"] .assistant-mark-active .mark::before {
+  box-shadow: none;
+}
+
+/* Small floating glass (chips, toast, "Latest", the quote pill) hard-codes
+   its blur for the default look; with frosted glass on it frosts like the
+   panels it floats beside. */
+:root[data-surface="glass"] :is(.dock-chip, .toast, .jump-btn, .quote-pill) {
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(var(--sat));
+  backdrop-filter: blur(var(--blur)) saturate(var(--sat));
+}
+
+/* System "Reduce transparency": the glass palette stays, but every panel
+   is solid (the colour each one shows over the plain backdrop). */
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-surface="glass"] { --glass: #0e0f13; --glass-strong: #101116; --chrome: #0e0f13; --blur: 0px; --blur-strong: 0px; --chrome-blur: 0px; }
+  :root[data-surface="glass"][data-theme="dim"] { --glass: #25272e; --glass-strong: #272931; --chrome: #25272e; }
+  :root[data-surface="glass"][data-theme="light"] { --glass: #fdfdfd; --glass-strong: #ffffff; --chrome: #fdfdfd; }
+  :root[data-surface="glass"][data-theme="light"][data-variant="soft"] { --glass: #fdfaf5; --glass-strong: #fefcf7; --chrome: #fdfaf5; }
+}
+
+/* ─── Glass ───────────────────────────────────────────────────────────── */
+.glass, .glass-strong {
+  position: relative;
+  border: 1px solid var(--line);
+  /* --edge-specular is only set when frosted glass is on; it falls back to
+     the same hairline as before, so the default look is byte-identical. */
+  box-shadow: var(--edge-specular, inset 0 1px 0 var(--highlight)), var(--shadow);
+}
+
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(var(--sat, 160%));
+  backdrop-filter: blur(var(--blur)) saturate(var(--sat, 160%));
+}
+
+.glass-strong {
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(var(--blur-strong)) saturate(var(--sat-strong, 170%));
+  backdrop-filter: blur(var(--blur-strong)) saturate(var(--sat-strong, 170%));
+  box-shadow: var(--edge-specular, inset 0 1px 0 var(--highlight)), var(--shadow-lg);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass { background: rgba(10, 10, 10, 0.94); }
+  .glass-strong { background: rgba(14, 14, 14, 0.98); }
+  :root[data-theme="dim"] .glass { background: rgba(38, 39, 45, 0.96); }
+  :root[data-theme="dim"] .glass-strong { background: rgba(44, 45, 52, 0.98); }
+  :root[data-theme="light"] .glass,
+  :root[data-theme="light"] .glass-strong { background: rgba(250, 250, 255, 0.96); }
+  :root[data-theme="light"][data-variant="soft"] .glass,
+  :root[data-theme="light"][data-variant="soft"] .glass-strong { background: rgba(255, 254, 250, 0.96); }
+}
+
+/* ─── Mark (brand + avatar): a tile with a live dot ───────────────────── */
+.mark {
+  --size: 32px;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--size);
+  height: var(--size);
+  border-radius: calc(var(--size) * 0.3);
+  background: var(--tile);
+  border: 1px solid var(--line-2);
+  box-shadow: inset 0 1px 0 var(--highlight), 0 6px 16px -8px rgba(0, 0, 0, 0.8);
+}
+
+.mark::before {
+  content: "";
+  width: 34%;
+  height: 34%;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(var(--accent-rgb), 0.7);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+body.is-busy .mark::before { animation: breathe 1.3s ease-in-out infinite; box-shadow: 0 0 14px rgba(var(--accent-rgb), 0.95); }
+body.is-offline .mark::before { background: var(--text-3); box-shadow: none; }
+
+.mark-lg { --size: 54px; }
+.mark-xl { --size: 68px; }
+
+/* ─── Icons ───────────────────────────────────────────────────────────── */
+/* Icons are blocks: an inline SVG sits on the text baseline and rides above
+   the label's optical centre. Every container that holds one centres it. */
+.ic {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  stroke-width: 1.9;
+}
+
+[data-icon] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+/* Optical centring: trim each single-line label's box to cap height, so a
+   centred icon lines up with the capitals, not with the font's (bottom-heavy)
+   ascent/descent box. Never on overflow:hidden labels — the trimmed box would
+   clip descenders. Unsupported browsers keep box centring (≤1px off). */
+@supports (text-box: trim-both cap alphabetic) {
+  .btn > span:not([data-icon]),
+  .chip-btn > span:not([data-icon]),
+  .cmd-btn-label,
+  .act-btn > span:not([data-icon]),
+  .mode-label > span,
+  .jump-btn > span:not([data-icon]),
+  .toast > span,
+  .link-btn {
+    text-box: trim-both cap alphabetic;
+  }
+}
+
+/* ─── Buttons ─────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 14px;
+  transition: background 0.18s, border-color 0.18s, transform 0.15s var(--ease), box-shadow 0.18s, opacity 0.18s;
+}
+
+.btn:hover:not(:disabled) { background: var(--card-hover); border-color: var(--line-2); }
+.btn:active:not(:disabled) { transform: translateY(1px) scale(0.98); }
+.btn:disabled { opacity: 0.5; }
+.btn-block { width: 100%; }
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-fg);
+  background: var(--primary-bg);
+  box-shadow: 0 6px 20px -10px rgba(255, 255, 255, 0.35);
+}
+.btn-primary:hover:not(:disabled) { background: var(--primary-hover); border-color: transparent; }
+:root[data-theme="light"] .btn-primary { box-shadow: 0 6px 18px -10px rgba(0, 0, 0, 0.5); }
+
+.btn-danger { color: var(--danger); border-color: var(--danger-line); background: var(--danger-soft); }
+.btn-danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
+
+.btn-ok { color: var(--ok); border-color: var(--accent-line); background: var(--ok-soft); }
+.btn-ok:hover:not(:disabled) { border-color: var(--ok); }
+
+.btn-quiet { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn-quiet:hover:not(:disabled) { color: var(--text); }
+
+.btn .ic { width: 16px; height: 16px; }
+.btn kbd { margin-left: 2px; }
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text-2);
+  transition: background 0.18s, color 0.18s, border-color 0.18s, transform 0.15s var(--ease);
+}
+.icon-btn:hover { background: var(--card-hover); color: var(--text); border-color: var(--line-2); }
+.icon-btn:active { transform: scale(0.92); }
+
+.link-btn {
+  padding: 2px 4px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  border-radius: 6px;
+}
+.link-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+.chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.18s, color 0.18s, border-color 0.18s, transform 0.15s var(--ease);
+}
+.chip-btn:hover { background: var(--card-hover); color: var(--text); border-color: var(--line-2); }
+.chip-btn:active { transform: scale(0.95); }
+.chip-btn .ic { width: 14px; height: 14px; }
+
+/* ─── Switch ──────────────────────────────────────────────────────────── */
+.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 38px;
+  height: 22px;
+  margin: 0;
+  border-radius: var(--r-pill);
+  background: var(--card-sunk);
+  border: 1px solid var(--line-2);
+  cursor: pointer;
+  transition: background 0.22s var(--ease), border-color 0.22s;
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-2);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  transition: transform 0.26s var(--ease), background 0.2s, width 0.2s var(--ease);
+}
+
+.switch:checked {
+  background: var(--accent-deep);
+  border-color: transparent;
+}
+.switch:checked::after { transform: translateX(16px); background: var(--on-accent); }
+/* The thumb stretches while pressed, like a physical toggle. */
+.switch:active:not(:disabled)::after { width: 21px; }
+.switch:checked:active:not(:disabled)::after { transform: translateX(11px); }
+.switch:disabled { opacity: 0.4; cursor: not-allowed; }
+.switch.is-pending { opacity: 0.6; }
+
+.warn .switch:checked { background: #d97706; }
+
+/* ─── Spinner ─────────────────────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes pop { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes shimmer { to { background-position: -200% 0; } }
+@keyframes breathe { 0%, 100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes send-in { from { opacity: 0; transform: translateY(14px) scale(0.94); } to { opacity: 1; transform: none; } }
+@keyframes pop-in { 0% { opacity: 0; transform: scale(0.4); } 60% { opacity: 1; transform: scale(1.18); } 100% { transform: none; } }
+@keyframes draw { from { stroke-dashoffset: 24; } to { stroke-dashoffset: 0; } }
+@keyframes ring { from { opacity: 0.75; transform: scale(1); } to { opacity: 0; transform: scale(1.9); } }
+@keyframes float { 50% { transform: translateY(-6px); } }
+@keyframes nudge { 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes bounce-dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-5px); opacity: 1; } }
+
+/* Copy / done confirmations: the check pops in. */
+.act-btn.is-done .ic,
+.md-code-copy.is-done .ic { animation: pop-in 0.42s var(--spring); }
+
+/* ─── Fold: smooth open / close for thoughts, tool output ──────────────
+   <div class="fold"><div class="fold-inner">…</div></div>, opened by an
+   `is-open` class on the fold's parent. Animates the real height. */
+.fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition: grid-template-rows 0.32s var(--ease), visibility 0s linear 0.32s;
+}
+.is-open > .fold {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  transition: grid-template-rows 0.32s var(--ease), visibility 0s;
+}
+.fold-inner {
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+.is-open > .fold > .fold-inner { opacity: 1; transition-delay: 0.06s; }
+
+/* ─── Theme change: the new colours spread from the click (theme.js) ─── */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
+  .spinner { animation: spin 1.6s linear infinite !important; }
+}

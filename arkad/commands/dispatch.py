@@ -1,0 +1,111 @@
+"""Central slash-command dispatcher.
+
+Returns a tuple (consumed, should_send, inp) where:
+  - consumed: True if the input was a slash command (handled or unknown)
+  - should_send: True if caller should send `inp` as a user message
+  - inp: possibly-updated input text to send
+"""
+from ..console import console
+from .help import cmd_help
+from .session import cmd_session
+from .files_shell import handle_files_shell
+from .context import handle_context
+from .history import handle_history
+from .control import handle_control
+from .memory import handle_memory
+from .lesson import handle_lesson
+from .skill import handle_skill
+from .agent import handle_agent
+from .command import handle_command, try_custom_command
+from .scan import handle_scan
+from .upgrade import cmd_upgrade
+from .settings import handle_settings
+
+# commands that set `inp` for sending
+FALLTHROUGH = {"/paste", "/multi"}
+
+
+def handle_slash(inp: str):
+    parts = inp.split(maxsplit=1)
+    c = parts[0]
+    arg = parts[1] if len(parts) > 1 else ""
+
+    if c == "/exit":
+        return ("exit", False, inp)
+    if c == "/help":
+        cmd_help(arg); return ("ok", False, inp)
+    if c in ("/session", "/sessions"):
+        cmd_session(arg); return ("ok", False, inp)
+
+    if c == "/mcp":
+        from ..mcp.manager import handle_mcp_command
+        result = handle_mcp_command(arg)
+        if result:
+            console.print(result)
+        return ("ok", False, inp)
+
+    if c == "/upgrade":
+        cmd_upgrade(arg)
+        return ("ok", False, inp)
+
+    handled, _ = handle_settings(c, arg)
+    if handled:
+        return ("ok", False, inp)
+
+    handled, _ = handle_memory(c, arg)
+    if handled:
+        return ("ok", False, inp)
+
+    handled, _ = handle_lesson(c, arg)
+    if handled:
+        return ("ok", False, inp)
+
+    handled, _ = handle_skill(c, arg)
+    if handled:
+        return ("ok", False, inp)
+
+    handled, _ = handle_agent(c, arg)
+    if handled:
+        return ("ok", False, inp)
+
+    handled, cmd_inp = handle_command(c, arg)
+    if handled:
+        if cmd_inp:
+            return ("ok", True, cmd_inp)
+        return ("ok", False, inp)
+
+    handled, scan_inp = handle_scan(c, arg)
+    if handled:
+        if scan_inp:
+            return ("ok", True, scan_inp)
+        return ("ok", False, inp)
+
+    # grouped handlers
+    if handle_files_shell(c, arg):
+        return ("ok", False, inp)
+
+    handled, new_inp = handle_history(c, arg)
+    if handled:
+        if c in FALLTHROUGH and new_inp is not None:
+            return ("ok", True, new_inp)
+        return ("ok", False, inp)
+
+    handled, new_inp = handle_context(c, arg)
+    if handled:
+        if c in FALLTHROUGH and new_inp is not None:
+            return ("ok", True, new_inp)
+        return ("ok", False, inp)
+
+    handled, new_inp = handle_control(c, arg)
+    if handled:
+        if c in FALLTHROUGH and new_inp is not None:
+            return ("ok", True, new_inp)
+        return ("ok", False, inp)
+
+    # last chance: user-defined custom command (/pr-description, /test, …)
+    expanded = try_custom_command(c, arg)
+    if expanded is not None:
+        return ("ok", True, expanded)
+
+    console.print(f"[red]unknown: {c}[/]  (/help — or /command new {c.lstrip('/')} to define it)")
+    return ("ok", False, inp)

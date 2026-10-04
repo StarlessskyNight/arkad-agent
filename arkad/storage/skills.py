@@ -1,0 +1,440 @@
+"""Skill discovery — find and load SKILL.md definitions.
+
+Follows the OpenCode.ai skill convention:
+- Project-level: .skills/<name>/SKILL.md (primary Arkad format)
+- OpenCode-compat: .opencode/skills/<name>/SKILL.md
+- Claude-compat: .claude/skills/<name>/SKILL.md
+- Agent-compat: .agents/skills/<name>/SKILL.md
+- Cursor / Codex / Gemini / Kiro: .cursor/skills, .codex/skills, .gemini/skills, .kiro/skills
+- Global: ~/.arkad/skills, ~/.config/arkad-agent/skills (Arkad), then every
+  other tool's user folder — see ``global_skill_dirs()``
+
+Every record carries ``tool`` (claude, cursor, … — see utils/origins.py) and
+``also``: other tools that have a skill of the same name (shadowed by it — the
+same skill is often installed into several tools at once).
+
+By default, only project-level skills are discovered. Set
+`include_global=True` (or state.global_skills) to also include
+global skills from the config directories.
+
+Each SKILL.md must start with YAML frontmatter:
+    ---
+    name: <required>
+    description: <required, 1-1024 chars>
+    license: <optional>
+    compatibility: <optional>
+    metadata: <optional, string-to-string map>
+    ---
+
+During discovery we only read the frontmatter (header). Full content
+is loaded on demand via load_skill().
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import re
+import shutil
+import time
+from typing import Dict, List, Optional, Tuple
+
+from ..constants import CONFIG_DIR, ARKAD_SKILLS_DIR, PROJECT_SKILLS_DIRNAME
+from .. import state
+from ..utils.origins import note_duplicate, tool_for_path
+
+# Directories to scan for skills, in priority order (first-found wins for dupes)
+SKILL_DIRS = [
+    # Primary Arkad format
+    PROJECT_SKILLS_DIRNAME,   # .arkad/skills
+    ".skills",                # legacy compat
+    # OpenCode compatibility
+    ".opencode/skills",
+    # Claude compatibility
+    ".claude/skills",
+    # Agent compatibility
+    ".agents/skills",
+    # Other tools' project folders
+    ".cursor/skills",
+    ".codex/skills",
+    ".gemini/skills",
+    ".kiro/skills",
+]
+
+
+def global_skill_dirs() -> list[pathlib.Path]:
+    """Every global skill folder, in priority order (first wins for dupes)."""
+    home = pathlib.Path.home()
+    codex_home = pathlib.Path(os.environ.get("CODEX_HOME") or home / ".codex")
+    return [
+        ARKAD_SKILLS_DIR,                      # ~/.arkad/skills (canonical)
+        CONFIG_DIR / "skills",                   # ~/.config/arkad-agent/skills (legacy)
+        home / ".config" / "opencode" / "skills",
+        home / ".claude" / "skills",
+        home / ".agents" / "skills",             # shared: `npx skills`, Codex
+        codex_home / "skills",
+        home / ".cursor" / "skills",
+        home / ".gemini" / "skills",
+        home / ".kiro" / "skills",
+        home / ".copilot" / "skills",
+    ]
+
+# ── cache ──────────────────────────────────────────────────────────────────────
+_cache: list[dict] = []
+_cache_key: str = ""  # "project" or "global" — which mode was cached
+_cache_ts: float = 0
+_CACHE_TTL = 5.0  # seconds before re-scanning
+
+
+def _find_project_root() -> pathlib.Path:
+    """Walk up from CWD to find git root or the first dir with .skills."""
+    cwd = pathlib.Path.cwd().resolve()
+    
+    # Check git root first
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            git_root = pathlib.Path(result.stdout.strip()).resolve()
+            if git_root.exists():
+                return git_root
+    except Exception:
+        pass
+    
+    # Fallback: walk up looking for .git or .skills
+    for parent in [cwd] + list(cwd.parents):
+        if (parent / ".git").exists() or (parent / ".skills").exists():
+            return parent
+    
+    return cwd
+
+
+def _find_skill_dirs(root: pathlib.Path) -> list[pathlib.Path]:
+    """Find all directories that may contain skills under root."""
+    dirs = []
+    for skill_dir_name in SKILL_DIRS:
+        d = root / skill_dir_name
+        if d.is_dir():
+            dirs.append(d)
+    return dirs
+
+
+def _parse_frontmatter(content: str) -> dict:
+    """Parse YAML-like frontmatter from SKILL.md content.
+
+    Returns a dict with 'name', 'description', and optional fields.
+    Only these fields are extracted from the frontmatter.
+    Unknown fields in frontmatter are silently ignored (per OpenCode spec).
+    """
+    result: dict = {}
+    
+    # Match frontmatter between --- markers
+    m = re.match(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+    if not m:
+        return result
+    
+    fm = m.group(1)
+    
+    # Parse simple key: value pairs (handle quoted and unquoted values)
+    current_key = None
+    current_val_lines = []
+    
+    for line in fm.split('\n'):
+        # Check for a new key: value line (possibly with leading spaces for indentation)
+        key_match = re.match(r'^(\w[\w.-]*)\s*:\s*(.*)', line)
+        if key_match:
+            # Save previous key if any
+            if current_key and current_val_lines:
+                val = '\n'.join(current_val_lines).strip()
+                if val:
+                    result[current_key] = val
+            
+            current_key = key_match.group(1)
+            val_part = key_match.group(2).strip()
+            # Strip quotes if present
+            if val_part and val_part[0] in ('"', "'") and val_part[-1] == val_part[0]:
+                val_part = val_part[1:-1]
+            # `description: >` / `|` — the text follows on the next lines
+            if val_part in (">", "|", ">-", "|-", ">+", "|+"):
+                val_part = ""
+            current_val_lines = [val_part] if val_part else []
+        elif current_key and line.strip():
+            # Continuation of multi-line value (indented)
+            current_val_lines.append(line.strip())
+        else:
+            # Empty line — reset multi-line accumulation
+            if current_key and current_val_lines:
+                val = '\n'.join(current_val_lines).strip()
+                if val:
+                    result[current_key] = val
+            current_key = None
+            current_val_lines = []
+    
+    # Don't forget the last key
+    if current_key and current_val_lines:
+        val = '\n'.join(current_val_lines).strip()
+        if val:
+            result[current_key] = val
+    
+    return result
+
+
+def _validate_skill(name: str, description: str) -> bool:
+    """Validate skill name and description per OpenCode rules."""
+    if not name or not isinstance(name, str):
+        return False
+    if not description or not isinstance(description, str):
+        return False
+    
+    # Name must be 1-64 chars, lowercase alphanumeric with single hyphens
+    if not re.match(r'^[a-z0-9]+(-[a-z0-9]+)*$', name):
+        return False
+    if len(name) > 64:
+        return False
+    
+    # Description must be 1-1024 chars
+    if len(description) > 1024:
+        return False
+    
+    return True
+
+
+def _scan_one_skill_dir(skill_dir: pathlib.Path, scope: str = "project") -> list[dict]:
+    """Scan a single skill directory (e.g. .skills/) for SKILL.md files.
+
+    Returns list of {name, description, path, source_dir, scope, tool} dicts.
+    `scope` is "project" for project-local skills, "global" for user-wide ones.
+    """
+    skills = []
+    
+    if not skill_dir.is_dir():
+        return skills
+    
+    try:
+        for entry in sorted(skill_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            skill_md = entry / "SKILL.md"
+            if not skill_md.is_file():
+                continue
+            
+            try:
+                content = skill_md.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            
+            fm = _parse_frontmatter(content)
+            name = (fm.get("name") or "").strip().lower()
+            description = (fm.get("description") or "").strip()
+            
+            if not _validate_skill(name, description):
+                continue
+            
+            # Verify directory name matches skill name
+            if entry.name.lower() != name:
+                continue
+            
+            skills.append({
+                "name": name,
+                "description": description,
+                "path": str(skill_md),
+                "source_dir": str(skill_dir),
+                "scope": scope,
+                "tool": tool_for_path(skill_dir),
+            })
+    except PermissionError:
+        pass
+    
+    return skills
+
+
+def discover_skills(force: bool = False, include_global: bool | None = None) -> list[dict]:
+    """Discover available skills.
+
+    Args:
+        force: If True, bypass the TTL cache and re-scan.
+        include_global: If True, include skills from global config dirs.
+            If None, read from ``state.global_skills`` (defaults to False).
+
+    Returns deduplicated list of {name, description, path, source_dir, scope, tool,
+    also} dicts.
+    Only reads frontmatter (name + description), never full content.
+    """
+    global _cache, _cache_ts, _cache_key
+
+    if include_global is None:
+        include_global = state.global_skills
+
+    cache_mode = "global" if include_global else "project"
+    now = time.monotonic()
+    if not force and _cache and _cache_key == cache_mode and (now - _cache_ts) < _CACHE_TTL:
+        return list(_cache)
+
+    all_skills: dict[str, dict] = {}  # name -> skill dict
+
+    def add(skill: dict) -> None:
+        if skill["name"] in all_skills:
+            note_duplicate(all_skills[skill["name"]], skill)
+        else:
+            skill["also"] = []
+            all_skills[skill["name"]] = skill
+
+    # 1. Project-level skills — walk up from CWD (always included)
+    root = _find_project_root()
+    for skill_dir_name in SKILL_DIRS:
+        for skill in _scan_one_skill_dir(root / skill_dir_name, scope="project"):
+            add(skill)
+
+    # 2. Global skills — only when include_global=True
+    if include_global:
+        for gdir in global_skill_dirs():
+            for skill in _scan_one_skill_dir(gdir, scope="global"):
+                add(skill)
+
+    result = list(all_skills.values())
+    _cache = result
+    _cache_key = cache_mode
+    _cache_ts = now
+    return result
+
+
+def load_skill(name: str) -> str | None:
+    """Load the full content of a skill by name.
+
+    Returns the full SKILL.md text (including frontmatter), or None
+    if no skill with that name is found.
+    """
+    skills = list_skills()
+    for skill in skills:
+        if skill["name"].lower() == name.lower():
+            p = pathlib.Path(skill["path"])
+            if p.exists():
+                try:
+                    return p.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    return None
+    return None
+
+
+def list_skills() -> list[dict]:
+    """Return all discovered skill headers (name + description + scope only)."""
+    return discover_skills()
+
+
+def skill_count() -> int:
+    """Return the number of discovered skills."""
+    return len(discover_skills())
+
+
+def global_count() -> int:
+    """Return number of global-only skills (not found in project scope)."""
+    # Discover in project-only mode to get the baseline
+    project_skills = discover_skills(force=True, include_global=False)
+    project_names = {s["name"] for s in project_skills}
+    all_skills = discover_skills(force=True, include_global=True)
+    return sum(1 for s in all_skills if s["name"] not in project_names)
+
+
+def invalidate_cache() -> None:
+    """Force the next discover_skills() call to re-scan."""
+    global _cache, _cache_ts, _cache_key
+    _cache = []
+    _cache_ts = 0.0
+    _cache_key = ""
+
+
+def export_skill_to_global(name: str) -> dict:
+    """Copy one project skill into the global ``~/.arkad/skills/`` tree."""
+    name_l = name.strip().lower()
+    skills = discover_skills(force=True, include_global=True)
+    rec = next((s for s in skills if s["name"] == name_l), None)
+    if rec is None:
+        return {"added": [], "skipped": [], "error": f"'{name_l}' not found"}
+
+    if rec.get("scope") == "global":
+        return {
+            "added": [],
+            "skipped": [name_l],
+            "path": str(rec["path"]),
+        }
+
+    src_dir = pathlib.Path(rec["path"]).parent
+    target_dir = ARKAD_SKILLS_DIR / name_l
+
+    if target_dir.exists():
+        return {"added": [], "skipped": [name_l], "path": str(target_dir / "SKILL.md")}
+
+    try:
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_dir, target_dir)
+    except OSError as e:
+        return {"added": [], "skipped": [], "error": str(e)}
+
+    invalidate_cache()
+    return {"added": [name_l], "skipped": [], "path": str(target_dir / "SKILL.md")}
+
+
+def import_skill_to_project(name: str) -> dict:
+    """Copy one global skill directory into the project ``.arkad/skills/`` tree."""
+    name_l = name.strip().lower()
+    skills = discover_skills(force=True, include_global=True)
+    rec = next((s for s in skills if s["name"] == name_l), None)
+    if rec is None:
+        return {"added": [], "skipped": [], "error": f"'{name_l}' not found"}
+
+    root = _find_project_root()
+    target_dir = root / PROJECT_SKILLS_DIRNAME / name_l
+
+    if rec.get("scope") == "project":
+        return {
+            "added": [],
+            "skipped": [name_l],
+            "path": str(target_dir if target_dir.exists() else rec["path"]),
+        }
+
+    if target_dir.exists():
+        return {"added": [], "skipped": [name_l], "path": str(target_dir)}
+
+    src_dir = pathlib.Path(rec["path"]).parent
+    try:
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_dir, target_dir)
+    except OSError as e:
+        return {"added": [], "skipped": [], "error": str(e)}
+
+    invalidate_cache()
+    return {"added": [name_l], "skipped": [], "path": str(target_dir / "SKILL.md")}
+
+
+def as_prompt_block() -> str:
+    """Format discovered skill headers (name + description) into the system prompt.
+
+    Name and description are always included so the agent can match skills
+    to tasks without calling skill_list(). Only full body content is
+    lazy-loaded via skill_load().
+    """
+    skills = discover_skills()
+    if not skills:
+        return ""
+
+    project_count = sum(1 for skill in skills if skill.get("scope") == "project")
+    global_count_value = sum(1 for skill in skills if skill.get("scope") == "global")
+    scope = "project + global" if state.global_skills else "project-only"
+    counts = f"{project_count} project"
+    if state.global_skills:
+        counts += f", {global_count_value} global"
+
+    lines = [f"SKILLS: {len(skills)} available ({counts}; scope: {scope})."]
+    lines.append("HIGH PRIORITY — before responding or acting, scan these headers.")
+    lines.append("If one or more skills might apply, call skill_load for EACH match — load all of them, not just one.")
+    lines.append("Batch multiple skill_load calls in the same turn when several headers match.")
+    lines.append("Do not skip skill checks for 'simple' tasks. Headers are listed below so you can match without skill_list().")
+    for s in skills:
+        tag = " [global]" if s.get("scope") == "global" else ""
+        lines.append(f"  • {s['name']}{tag}: {s['description']}")
+    return "\n".join(lines)

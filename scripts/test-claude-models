@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Verify the Claude 5 family is registered in the repo AND in the live `arkad` install.
+#
+# Usage:
+#   bash scripts/test-claude-models              # check repo + live arkad command
+#   bash scripts/test-claude-models --repo-only  # check this git checkout only
+#   bash scripts/test-claude-models --arkad-only
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MODE="${1:-all}"
+FAIL=0
+
+pick_repo_python() {
+  local candidate
+  for candidate in \
+    "${ROOT}/.venv/bin/python" \
+    "${HOME}/.local/share/arkad-agent/.venv/bin/python3" \
+    "$(command -v python3 2>/dev/null || true)"
+  do
+    [ -n "${candidate}" ] || continue
+    [ -x "${candidate}" ] || continue
+    if PYTHONPATH="${ROOT}" "${candidate}" -c "import arkad.constants.providers" >/dev/null 2>&1; then
+      echo "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+check_python() {
+  local label="$1"
+  local py="$2"
+  local use_repo_path="${3:-0}"
+  echo "==> ${label}"
+  echo "    python: ${py}"
+  run_check() {
+    "${@}" - <<'PY'
+from arkad.constants.providers import (
+    ANTHROPIC_AUTH_MODEL_IDS,
+    ANTHROPIC_DEFAULT_MODEL,
+    ANTHROPIC_MODELS,
+    MODEL_INFO,
+    PROVIDER_ANTHROPIC,
+    PROVIDER_ANTHROPIC_API,
+    PROVIDER_ANTHROPIC_AUTH,
+    models_for_source,
+)
+
+# Newest first — matches MODELS / ANTHROPIC_AUTH_MODEL_IDS ordering.
+EXPECTED = [
+    ("claude-opus-5-5", (4.0, 20.0)),
+    ("claude-fable-5-1", (10.0, 50.0)),
+    ("claude-mythos-5-1", (10.0, 50.0)),
+    ("claude-opus-5", (5.0, 25.0)),
+    ("claude-sonnet-5", (2.0, 10.0)),
+]
+
+errors = []
+for model_id, pricing in EXPECTED:
+    if model_id not in MODEL_INFO:
+        errors.append(f"missing from MODEL_INFO: {model_id}")
+        continue
+    _, provider, got_pricing = MODEL_INFO[model_id]
+    if provider != PROVIDER_ANTHROPIC:
+        errors.append(f"{model_id}: wrong provider {provider!r}")
+    if got_pricing != pricing:
+        errors.append(f"{model_id}: unexpected pricing {got_pricing!r}")
+
+api_ids = [m for m, _ in ANTHROPIC_MODELS]
+if api_ids != [m for m, _ in EXPECTED]:
+    errors.append(f"ANTHROPIC_MODELS not newest-first: {api_ids!r}")
+
+if list(ANTHROPIC_AUTH_MODEL_IDS) != [m for m, _ in EXPECTED]:
+    errors.append(f"ANTHROPIC_AUTH_MODEL_IDS not newest-first: {list(ANTHROPIC_AUTH_MODEL_IDS)!r}")
+
+if ANTHROPIC_DEFAULT_MODEL != "claude-sonnet-5":
+    errors.append(f"unexpected Anthropic default: {ANTHROPIC_DEFAULT_MODEL!r}")
+
+auth_picker = [m for m, _ in models_for_source(PROVIDER_ANTHROPIC_AUTH)]
+api_picker = [m for m, _ in models_for_source(PROVIDER_ANTHROPIC_API)]
+for model_id, _ in EXPECTED:
+    if model_id not in auth_picker:
+        errors.append(f"missing from Anthropic Auth picker: {model_id}")
+    if model_id not in api_picker:
+        errors.append(f"missing from Anthropic API picker: {model_id}")
+
+import arkad.constants.providers as providers_mod
+print(f"    module: {providers_mod.__file__}")
+
+if errors:
+    print("FAIL:")
+    for err in errors:
+        print(f"  - {err}")
+    raise SystemExit(1)
+
+print("PASS: Claude 5 family registered for Anthropic API + Anthropic Auth")
+PY
+  }
+  if [ "${use_repo_path}" = "1" ]; then
+    if ! run_check env "PYTHONPATH=${ROOT}" "${py}"; then
+      FAIL=1
+    fi
+  elif ! run_check "${py}"; then
+    FAIL=1
+  fi
+  echo
+}
+
+resolve_arkad_python() {
+  local arkad_bin
+  arkad_bin="$(command -v arkad 2>/dev/null || true)"
+  if [ -z "${arkad_bin}" ]; then
+    echo "WARN: arkad not found on PATH" >&2
+    return 1
+  fi
+  echo "    arkad: ${arkad_bin}" >&2
+  head -1 "${arkad_bin}" | sed 's/^#!//' | tr -d '\r'
+}
+
+case "${MODE}" in
+  --repo-only|repo-only)
+    REPO_PY="$(pick_repo_python)" || { echo "FAIL: no python can import arkad from ${ROOT}" >&2; exit 1; }
+    check_python "repo checkout (${ROOT})" "${REPO_PY}" 1
+    ;;
+  --arkad-only|arkad-only)
+    ARKAD_PY="$(resolve_arkad_python)" || exit 1
+    check_python "live arkad command" "${ARKAD_PY}"
+    ;;
+  --help|-h)
+    sed -n '2,8p' "$0"
+    exit 0
+    ;;
+  --all|all|"")
+    REPO_PY="$(pick_repo_python)" || { echo "FAIL: no python can import arkad from ${ROOT}" >&2; exit 1; }
+    check_python "repo checkout (${ROOT})" "${REPO_PY}" 1
+
+    if ARKAD_PY="$(resolve_arkad_python)"; then
+      check_python "live arkad command" "${ARKAD_PY}" 0
+    else
+      FAIL=1
+    fi
+
+    REPO_MODULE="$(env PYTHONPATH="${ROOT}" "${REPO_PY}" -c "import arkad.constants.providers as p; print(p.__file__)" 2>/dev/null || true)"
+    ARKAD_MODULE=""
+    if ARKAD_PY="$(resolve_arkad_python 2>/dev/null)"; then
+      ARKAD_MODULE="$("${ARKAD_PY}" -c "import arkad.constants.providers as p; print(p.__file__)" 2>/dev/null || true)"
+    fi
+    if [ -n "${REPO_MODULE}" ] && [ -n "${ARKAD_MODULE}" ] && [ "${REPO_MODULE}" != "${ARKAD_MODULE}" ]; then
+      echo "NOTE: repo and live arkad load different code (both passed Claude 5 checks):"
+      echo "  repo:   ${REPO_MODULE}"
+      echo "  arkad: ${ARKAD_MODULE}"
+      echo
+      echo "To make \`arkad\` use this repo directly:"
+      echo "  cd ${ROOT}"
+      echo "  ~/.local/share/arkad-agent/.venv/bin/pip install -e ."
+      echo "  # then quit and restart arkad"
+    fi
+    ;;
+  *)
+    echo "unknown mode: ${MODE} (use --all, --repo-only, or --arkad-only)" >&2
+    exit 1
+    ;;
+esac
+
+if [ "${FAIL}" -ne 0 ]; then
+  echo "Some checks failed." >&2
+  exit 1
+fi
+
+echo "All Claude 5 family checks passed."

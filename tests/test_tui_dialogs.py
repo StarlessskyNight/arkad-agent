@@ -1,0 +1,362 @@
+"""Headless tests for the redesigned picker dialogs (models, sessions, palette)."""
+import asyncio
+import time
+
+import pytest
+
+
+@pytest.fixture()
+def hermetic_app(monkeypatch):
+    monkeypatch.setenv("ARKAD_SKIP_UPDATE", "1")
+
+    import arkad.updater as updater
+    import arkad.mcp.registry as mcp_registry
+    import arkad.storage.sessions as sessions
+    import arkad.storage.settings as settings
+    import arkad.tui.prompt_history as prompt_history
+
+    monkeypatch.setattr(updater, "maybe_update_and_reexec", lambda: None)
+    monkeypatch.setattr(mcp_registry, "auto_connect_servers", lambda console_print=None, **kw: None,
+                        raising=False)
+    monkeypatch.setattr(sessions, "db_init", lambda: None)
+    monkeypatch.setattr(sessions, "db_create_session", lambda model: None)
+    monkeypatch.setattr(settings.Settings, "save", lambda self: None)
+    monkeypatch.setattr(prompt_history.PromptHistory, "_save", lambda self: None)
+
+    from arkad.tui.app import ArkadTUI
+
+    monkeypatch.setattr(ArkadTUI, "_warm_model_catalogs_background", lambda self: None)
+    return ArkadTUI
+
+
+def _enabled_ids(opts):
+    return [opts.get_option_at_index(i).id for i in range(opts.option_count)
+            if not opts.get_option_at_index(i).disabled]
+
+
+def test_model_picker_groups_recent_and_enter_picks(hermetic_app, monkeypatch):
+    import arkad.tui.model_modal as mm
+    from arkad import state
+    from arkad.constants import PROVIDER_ARKAD_AGENT, PROVIDER_OPENROUTER, model_option_id
+
+    rows = [
+        (PROVIDER_ARKAD_AGENT, "free-a", "Free A — default"),
+        (PROVIDER_ARKAD_AGENT, "free-b", "Free B"),
+        (PROVIDER_OPENROUTER, "vendor/big-model", "Big — 1M ctx"),
+    ]
+    monkeypatch.setattr(mm, "model_picker_rows", lambda live=False: rows)
+    monkeypatch.setattr(mm.ModelPickerScreen, "_refresh_catalogs", lambda self: None)
+    monkeypatch.setattr(mm, "_recent_models", lambda: [model_option_id(PROVIDER_ARKAD_AGENT, "free-b")])
+    remembered: list[str] = []
+    monkeypatch.setattr(mm, "_remember_model", remembered.append)
+    picked: list = []
+
+    async def run() -> None:
+        app = hermetic_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            # (after mount: startup resolves the real provider from config)
+            monkeypatch.setattr(state, "MODEL", "vendor/big-model")
+            monkeypatch.setattr(state, "provider", PROVIDER_OPENROUTER)
+            app.push_screen(mm.ModelPickerScreen(), picked.append)
+            await pilot.pause(0.3)
+            opts = app.screen.query_one("#model_list")
+            ids = _enabled_ids(opts)
+            # Recent first: current model, then the remembered one.
+            assert ids[0] == "recent:" + model_option_id(PROVIDER_OPENROUTER, "vendor/big-model")
+            assert ids[1] == "recent:" + model_option_id(PROVIDER_ARKAD_AGENT, "free-b")
+            headers = [str(opts.get_option_at_index(i).prompt).strip()
+                       for i in range(opts.option_count) if opts.get_option_at_index(i).disabled]
+            assert headers[0] == "RECENT" and any("ARKAD AGENT" in h for h in headers)
+            # Typing filters and drops the Recent group; Enter picks from search.
+            for ch in "free-a":
+                await pilot.press(ch)
+            await pilot.pause(0.1)
+            assert _enabled_ids(opts) == [model_option_id(PROVIDER_ARKAD_AGENT, "free-a")]
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+
+    asyncio.run(run())
+    assert picked == [model_option_id(PROVIDER_ARKAD_AGENT, "free-a")]
+    assert remembered == picked
+
+
+def test_session_picker_groups_search_and_two_step_delete(hermetic_app, monkeypatch):
+    import arkad.tui.session_modal as sm
+
+    now = time.time()
+    data = [
+        {"id": 3, "title": "fix stream stall", "model": "m1", "updated_at": now - 60, "msg_count": 4},
+        {"id": 2, "title": "redesign tui", "model": "m2", "updated_at": now - 86400 - 60, "msg_count": 9},
+        {"id": 1, "title": "old work", "model": "m3", "updated_at": now - 90 * 86400, "msg_count": 2},
+    ]
+    deleted: list[int] = []
+    monkeypatch.setattr(sm, "db_list_sessions", lambda limit=60, offset=0: data[offset:offset + limit])
+    monkeypatch.setattr(sm, "db_count_sessions", lambda: len(data))
+    monkeypatch.setattr(sm, "db_delete_session", lambda sid: deleted.append(sid) or True)
+
+    async def run() -> None:
+        app = hermetic_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            app.push_screen(sm.SessionPickerScreen())
+            await pilot.pause(0.3)
+            opts = app.screen.query_one("#session_list")
+            headers = [str(opts.get_option_at_index(i).prompt).strip()
+                       for i in range(opts.option_count) if opts.get_option_at_index(i).disabled]
+            assert headers == ["TODAY", "YESTERDAY", "OLDER"]
+            assert _enabled_ids(opts) == ["3", "2", "1"]
+
+            for ch in "tui":
+                await pilot.press(ch)
+            await pilot.pause(0.1)
+            assert _enabled_ids(opts) == ["2"]
+
+            await pilot.press("ctrl+d")  # arm
+            await pilot.pause(0.1)
+            assert deleted == [], "first ^d must only arm the delete"
+            await pilot.press("ctrl+d")  # confirm
+            await pilot.pause(0.1)
+            assert deleted == [2]
+
+    asyncio.run(run())
+
+
+def test_session_picker_refuses_to_delete_the_active_session(hermetic_app, monkeypatch):
+    import arkad.tui.session_modal as sm
+    from arkad import state
+
+    now = time.time()
+    data = [
+        {"id": 3, "title": "current chat", "model": "m1", "updated_at": now - 60, "msg_count": 4},
+        {"id": 2, "title": "older chat", "model": "m2", "updated_at": now - 120, "msg_count": 9},
+    ]
+    deleted: list[int] = []
+    monkeypatch.setattr(sm, "db_list_sessions", lambda limit=60, offset=0: data[offset:offset + limit])
+    monkeypatch.setattr(sm, "db_count_sessions", lambda: len(data))
+    monkeypatch.setattr(sm, "db_delete_session", lambda sid: deleted.append(sid) or True)
+
+    async def run() -> None:
+        app = hermetic_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            monkeypatch.setattr(state, "current_session_id", 3)
+            app.push_screen(sm.SessionPickerScreen())
+            await pilot.pause(0.3)
+            screen = app.screen
+            assert screen._current_id() == 3
+            await pilot.press("ctrl+d", "ctrl+d")
+            await pilot.pause(0.1)
+            assert deleted == [] and screen._pending_delete is None
+            # Another row still deletes, and the list moves on to what's left.
+            await pilot.press("down", "ctrl+d", "ctrl+d")
+            await pilot.pause(0.1)
+            assert deleted == [2]
+            assert _enabled_ids(screen.query_one("#session_list")) == ["3"]
+
+    asyncio.run(run())
+
+
+def test_palette_groups_when_browsing_and_flattens_when_searching(hermetic_app):
+    from arkad.tui.palette_modal import CommandPaletteScreen
+
+    async def run() -> None:
+        app = hermetic_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            app.push_screen(CommandPaletteScreen())
+            await pilot.pause(0.3)
+            opts = app.screen.query_one("#palette_options")
+            headers = [str(opts.get_option_at_index(i).prompt).strip()
+                       for i in range(opts.option_count) if opts.get_option_at_index(i).disabled]
+            assert headers[:2] == ["SESSION", "MODEL & AGENT"]
+            for ch in "them":
+                await pilot.press(ch)
+            await pilot.pause(0.1)
+            assert not any(opts.get_option_at_index(i).disabled for i in range(opts.option_count))
+            assert _enabled_ids(opts)[0].startswith("/theme")
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "keys, expected",
+    [
+        (["y"], "y"),
+        (["a"], "a"),
+        (["n"], "n"),
+        (["escape"], "n"),
+        (["enter"], "y"),  # "Yes" is the default row
+        (["down", "enter"], "a"),
+        (["down", "down", "enter"], "n"),
+        (["up", "enter"], "n"),  # wraps from the top
+        (["j", "k", "k", "enter"], "n"),
+    ],
+)
+def test_shell_approval_keys(hermetic_app, keys, expected):
+    from arkad.tui.shell_approval_modal import ShellApprovalScreen
+
+    picked: list = []
+
+    async def run() -> None:
+        app = hermetic_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            app.push_screen(ShellApprovalScreen("npm run build"), picked.append)
+            await pilot.pause(0.3)
+            for key in keys:
+                await pilot.press(key)
+            await pilot.pause(0.2)
+
+    asyncio.run(run())
+    assert picked == [expected]
+
+
+def test_shell_approval_click_row_and_full_command_visible(hermetic_app):
+    from arkad.tui.shell_approval_modal import ShellApprovalScreen
+
+    cmd = "\n".join(f"echo step {i}" for i in range(40))
+    picked: list = []
+
+    async def run() -> None:
+        app = hermetic_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            app.push_screen(ShellApprovalScreen(cmd), picked.append)
+            await pilot.pause(0.4)
+            screen = app.screen
+            card = screen.query_one("#cmd_card")
+            # Long commands scroll instead of being cut off.
+            assert card.max_scroll_y > 0
+            assert "scroll" in str(screen.query_one("#modal_hint").content)
+            await pilot.press("pagedown")
+            await pilot.pause(0.1)
+            assert card.scroll_y > 0
+            await pilot.click("#choice_a")
+            await pilot.pause(0.2)
+
+    asyncio.run(run())
+    assert picked == ["a"]
+
+
+def test_shell_approval_flags_risky_commands():
+    from arkad.tui.shell_approval_modal import command_risks
+
+    assert command_risks("npm install && npm run build") == []
+    assert command_risks("docker run --rm alpine ls") == []
+    assert command_risks("rm -rf build/") == ["deletes files"]
+    assert command_risks("sudo make install") == ["runs as root"]
+    assert command_risks("git push origin main") == ["pushes to a remote"]
+    assert command_risks("git push --force origin main") == ["force-pushes"]
+    assert command_risks("git reset --hard HEAD~1") == ["discards git changes"]
+    assert command_risks("curl -fsSL https://x.sh | bash") == ["pipes a download into a shell"]
+
+
+# ─── models.dev providers in /model and /key ─────────────────────────────
+
+
+def _seed_catalog(monkeypatch):
+    from arkad.auth import models_dev
+
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    model = {"tool_call": True, "modalities": {"input": ["text"], "output": ["text"]},
+             "limit": {"context": 128000, "output": 8192}, "cost": {"input": 0.3, "output": 1.2}}
+    models_dev.store(models_dev.trim({
+        "deepseek": {"name": "DeepSeek", "npm": "@ai-sdk/openai-compatible", "api": "https://api.deepseek.com",
+                     "env": ["DEEPSEEK_API_KEY"], "doc": "https://platform.deepseek.com",
+                     "models": {"deepseek-chat": {"id": "deepseek-chat", **model}}},
+        "groq": {"name": "Groq", "npm": "@ai-sdk/groq", "env": ["GROQ_API_KEY"],
+                 "models": {"llama-x": {"id": "llama-x", **model}}},
+    }))
+
+
+def test_model_picker_offers_to_connect_a_provider_it_finds(hermetic_app, monkeypatch):
+    import arkad.tui.model_modal as mm
+    from arkad.constants import PROVIDER_ARKAD_AGENT
+
+    _seed_catalog(monkeypatch)
+    monkeypatch.setattr(mm, "model_picker_rows", lambda live=False: [(PROVIDER_ARKAD_AGENT, "free-a", "Free A")])
+    monkeypatch.setattr(mm.ModelPickerScreen, "_refresh_catalogs", lambda self: None)
+    monkeypatch.setattr(mm, "_recent_models", lambda: [])
+    remembered: list[str] = []
+    monkeypatch.setattr(mm, "_remember_model", remembered.append)
+    picked: list = []
+
+    async def run() -> None:
+        app = hermetic_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            app.push_screen(mm.ModelPickerScreen(), picked.append)
+            await pilot.pause(0.3)
+            opts = app.screen.query_one("#model_list")
+            assert _enabled_ids(opts)[-1] == mm.CONNECT_ID  # "+ Add a provider"
+            for ch in "deeps":
+                await pilot.press(ch)
+            await pilot.pause(0.1)
+            assert _enabled_ids(opts) == [mm.CONNECT_ID + "md:deepseek"]
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+
+    asyncio.run(run())
+    assert picked == [mm.CONNECT_ID + "md:deepseek"]
+    assert remembered == [], "a connect row is not a model pick"
+
+
+def test_key_modal_searches_catalog_providers_and_saves_a_key(hermetic_app, monkeypatch):
+    from arkad.auth import catalog_keys
+    import arkad.tui.key_modal as km
+
+    _seed_catalog(monkeypatch)
+    applied: list = []
+    monkeypatch.setattr(km, "_apply_key_change", lambda provider, removed=False: applied.append(provider) or "")
+
+    async def run() -> None:
+        app = hermetic_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            app.push_screen(km.KeyModalScreen())
+            await pilot.pause(0.3)
+            opts = app.screen.query_one("#key_list")
+            ids = _enabled_ids(opts)
+            assert ids[: len(km._KEY_DEFS)] == [km._key_id(k["provider"]) for k in km._KEY_DEFS]
+            assert ids[len(km._KEY_DEFS):] == ["kp:md:deepseek", "kp:md:groq"]
+            await pilot.press("slash")
+            for ch in "groq":
+                await pilot.press(ch)
+            await pilot.pause(0.1)
+            assert _enabled_ids(opts) == ["kp:md:groq"]
+            await pilot.press("enter")  # Enter in the search box adds a key
+            await pilot.pause(0.3)
+            assert type(app.screen).__name__ == "TextInputScreen"
+            for ch in "gsk-test-123456":
+                await pilot.press(ch)
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert catalog_keys.get_key("md:groq") == "gsk-test-123456"
+            # Connected providers move up into their own group.
+            assert "kp:md:groq" in _enabled_ids(opts)
+            headers = [str(opts.get_option_at_index(i).prompt).strip()
+                       for i in range(opts.option_count) if opts.get_option_at_index(i).disabled]
+            assert any("FROM MODELS.DEV" in h for h in headers)
+
+    asyncio.run(run())
+    assert applied == ["md:groq"]
+
+
+def test_key_modal_can_open_straight_on_one_provider(hermetic_app, monkeypatch):
+    import arkad.tui.key_modal as km
+
+    _seed_catalog(monkeypatch)
+
+    async def run() -> None:
+        app = hermetic_app()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            app.push_screen(km.KeyModalScreen(focus="md:deepseek", add=True))
+            await pilot.pause(0.5)
+            assert type(app.screen).__name__ == "TextInputScreen"
+            body = str(app.screen.query_one("#modal_body").render())
+            assert "platform.deepseek.com" in body and "$DEEPSEEK_API_KEY" in body
+
+    asyncio.run(run())

@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#000000">
+  <title>Arkad Remote</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='1' y='1' width='30' height='30' rx='9' fill='%230b0b0b' stroke='%23333'/%3E%3Ccircle cx='16' cy='16' r='5.5' fill='%234ade80'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script>
+    // Apply the saved appearance before first paint (no flash). See js/theme.js.
+    (function () {
+      var mode = 'dark', soft = null, accent = 'green', glass = null;
+      try {
+        mode = localStorage.getItem('arkad-theme') || 'dark';
+        soft = localStorage.getItem('arkad-soft');
+        glass = localStorage.getItem('arkad-glass');
+        accent = localStorage.getItem('arkad-accent') || 'green';
+      } catch (e) {}
+      // Old builds saved the soft themes as modes ('dim', 'soft').
+      if (mode === 'dim' || mode === 'soft') soft = '1';
+      if (mode === 'system') mode = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      var light = mode === 'light' || mode === 'soft';
+      // Soft light is the light palette + data-variant="soft"; soft dark is "dim".
+      document.documentElement.dataset.theme = light ? 'light' : (soft === '1' ? 'dim' : 'dark');
+      if (light && soft === '1') document.documentElement.dataset.variant = 'soft';
+      // Frosted glass rides on its own attribute, independent of theme/variant.
+      if (glass === '1') document.documentElement.dataset.surface = 'glass';
+      document.documentElement.dataset.accent = accent;
+      // Custom accent: the raw colour now; theme.js tunes it for the theme.
+      try {
+        var hex = accent === 'custom' && localStorage.getItem('arkad-accent-custom');
+        if (hex && /^#[0-9a-f]{6}$/i.test(hex)) {
+          var n = parseInt(hex.slice(1), 16);
+          document.documentElement.style.setProperty('--accent-rgb', (n >> 16) + ', ' + ((n >> 8) & 255) + ', ' + (n & 255));
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/layout.css">
+  <link rel="stylesheet" href="/static/css/chat.css">
+  <link rel="stylesheet" href="/static/css/composer.css">
+  <link rel="stylesheet" href="/static/css/overlays.css">
+  <link rel="stylesheet" href="/static/css/extensions.css">
+  <link rel="stylesheet" href="/static/css/dialogs.css">
+  <link rel="stylesheet" href="/static/css/inspector.css">
+  <link rel="stylesheet" href="/static/css/media.css">
+  <link rel="stylesheet" href="/static/css/queue-pin.css">
+</head>
+<body>
+  <div class="backdrop" aria-hidden="true">
+    <span class="glow"></span>
+    <span class="grid"></span>
+  </div>
+
+  <div class="gate" id="gate" hidden>
+    <div class="gate-card glass-strong">
+      <span class="mark mark-lg" aria-hidden="true"></span>
+      <h1 id="gate-title">Open the link from your terminal</h1>
+      <p id="gate-text">This page needs the private link Arkad printed when you ran <code>arkad --web</code>. It ends in <code>?token=…</code>.</p>
+      <button type="button" class="btn btn-primary" id="gate-retry">Try again</button>
+    </div>
+  </div>
+
+  <div class="shell" id="shell">
+    <aside class="sidebar glass" id="sidebar" aria-label="Session controls">
+      <div class="side-head">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          <div class="brand-text">
+            <strong>Arkad</strong>
+            <span id="conn-line">Connecting…</span>
+          </div>
+        </div>
+        <div class="side-head-actions">
+          <button class="icon-btn" id="theme-btn" type="button" aria-label="Switch theme" title="Switch theme"><span data-icon="moon"></span></button>
+          <button class="icon-btn" id="appearance-btn" type="button" aria-label="Appearance" title="Appearance"><span data-icon="palette"></span></button>
+          <button class="icon-btn only-narrow" id="side-close" type="button" aria-label="Close panel"><span data-icon="x"></span></button>
+        </div>
+      </div>
+
+      <button class="btn btn-primary btn-block" id="new-chat" type="button">
+        <span data-icon="plus"></span><span>New chat</span>
+      </button>
+
+      <div class="side-scroll">
+        <section class="side-sec" aria-label="Model and agent">
+          <button class="select-card" id="model-card" type="button">
+            <span class="sc-icon" data-icon="cpu"></span>
+            <span class="sc-body">
+              <span class="sc-label">Model</span>
+              <strong class="sc-value" id="model-name">—</strong>
+              <span class="sc-sub" id="model-provider"></span>
+            </span>
+            <span class="sc-chev" data-icon="chevrons-up-down"></span>
+          </button>
+          <button class="select-card" id="agent-card" type="button">
+            <span class="sc-icon" data-icon="sparkles"></span>
+            <span class="sc-body">
+              <span class="sc-label">Agent</span>
+              <strong class="sc-value" id="agent-name">No agent</strong>
+              <span class="sc-sub" id="agent-sub">Base system prompt</span>
+            </span>
+            <span class="sc-chev" data-icon="chevrons-up-down"></span>
+          </button>
+          <button class="select-card" id="providers-card" type="button">
+            <span class="sc-icon" data-icon="key-round"></span>
+            <span class="sc-body">
+              <span class="sc-label">Providers</span>
+              <strong class="sc-value" id="providers-name">Add a provider</strong>
+              <span class="sc-sub" id="providers-line">Sign in or paste an API key</span>
+            </span>
+            <span class="sc-chev" data-icon="chevron-right"></span>
+          </button>
+        </section>
+
+        <section class="side-sec">
+          <div class="sec-head">
+            <h2 class="sec-title">Recent sessions</h2>
+            <button class="link-btn" id="all-sessions" type="button">View all</button>
+          </div>
+          <div class="recent" id="recent-list" role="list"></div>
+        </section>
+
+        <section class="side-sec">
+          <h2 class="sec-title">Reasoning</h2>
+          <label class="switch-row" for="sw-think">
+            <span class="sw-icon" data-icon="brain"></span>
+            <span class="sw-text"><strong>Extended thinking</strong><span>Think before answering</span></span>
+            <input type="checkbox" class="switch" id="sw-think" role="switch">
+          </label>
+          <div class="effort" id="effort" role="radiogroup" aria-label="Thinking effort"></div>
+        </section>
+
+        <section class="side-sec">
+          <h2 class="sec-title">Transcript</h2>
+          <label class="switch-row" for="sw-trace">
+            <span class="sw-icon" data-icon="list-tree"></span>
+            <span class="sw-text"><strong>Tool trace</strong><span>Thinking and tool details</span></span>
+            <input type="checkbox" class="switch" id="sw-trace" role="switch">
+          </label>
+          <label class="switch-row" for="sw-thoughts">
+            <span class="sw-icon" data-icon="eye"></span>
+            <span class="sw-text"><strong>Show thoughts here</strong><span id="thoughts-sub">Only on this device</span></span>
+            <input type="checkbox" class="switch" id="sw-thoughts" role="switch">
+          </label>
+        </section>
+
+        <section class="side-sec">
+          <h2 class="sec-title">Shell</h2>
+          <label class="switch-row warn" for="sw-auto">
+            <span class="sw-icon" data-icon="shield"></span>
+            <span class="sw-text"><strong>Auto-approve commands</strong><span>Skip the approval prompt</span></span>
+            <input type="checkbox" class="switch" id="sw-auto" role="switch">
+          </label>
+        </section>
+
+      </div>
+
+      <div class="side-foot">
+        <div class="usage" id="usage" aria-label="Usage this session">
+          <div class="usage-cell"><span class="usage-num" id="use-in">0</span><span class="usage-lbl">tokens in</span></div>
+          <div class="usage-cell"><span class="usage-num" id="use-out">0</span><span class="usage-lbl">tokens out</span></div>
+          <div class="usage-cell"><span class="usage-num" id="use-tools">0</span><span class="usage-lbl">tool calls</span></div>
+        </div>
+        <div class="foot-actions">
+          <button class="chip-btn" id="open-skills" type="button"><span data-icon="book-open"></span><span>Skills</span></button>
+          <button class="chip-btn" id="open-commands" type="button" aria-label="Custom commands" title="Your slash commands"><span data-icon="terminal"></span><span>Commands</span></button>
+          <button class="chip-btn" id="open-mcp" type="button" aria-label="MCP servers"><span data-icon="plug"></span><span>MCP</span><span class="attn-dot" id="mcp-dot" hidden aria-hidden="true"></span></button>
+        </div>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <main class="main">
+      <header class="topbar glass">
+        <button class="icon-btn only-narrow" id="menu-btn" type="button" aria-label="Open panel"><span data-icon="panel-left"></span></button>
+        <div class="title-wrap">
+          <h1 id="session-title">New session</h1>
+          <p id="session-meta"></p>
+        </div>
+        <div class="status-pill" id="status-pill" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="status-text">Connecting</span>
+        </div>
+        <button class="icon-btn only-wide" id="qr-btn" type="button" aria-label="Share this session: QR code and link" title="Share — scan the QR code or copy the link">
+          <span data-icon="qr-code"></span>
+        </button>
+        <button class="cmd-btn" id="palette-btn" type="button" aria-label="Commands (Ctrl+K)">
+          <span data-icon="command"></span><span class="cmd-btn-label">Commands</span><kbd id="palette-kbd">Ctrl K</kbd>
+        </button>
+        <button class="insp-btn" id="insp-btn" type="button" aria-controls="inspector" aria-expanded="false" aria-label="Changes and activity" title="Changes and activity (Alt D)">
+          <span class="insp-ic" data-icon="panel-right"></span>
+          <span class="insp-stat" id="insp-stat" hidden><b class="num-add" id="insp-add">+0</b><b class="num-del" id="insp-del">−0</b></span>
+          <span class="insp-badge" id="insp-badge" hidden>0</span>
+        </button>
+      </header>
+
+      <div class="conn-banner" id="conn-banner" role="status" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span class="cb-ok" data-icon="wifi" aria-hidden="true"></span>
+        <span id="conn-banner-text">Lost connection to Arkad. Reconnecting…</span>
+      </div>
+
+
+      <div class="chat-scroll" id="chat-scroll">
+        <div class="chat" id="chat" aria-live="polite" aria-relevant="additions"></div>
+        <div class="empty" id="empty">
+          <span class="mark mark-xl" aria-hidden="true"></span>
+          <p class="eyebrow">Arkad remote</p>
+          <h2>What should Arkad work on?</h2>
+          <p>Messages you send here run in the Arkad session on your computer, with the same tools, files and approvals.</p>
+          <div class="starters" id="starters"></div>
+        </div>
+      </div>
+
+      <div class="dock">
+        <!-- Inside the dock so it always floats just above it, however tall the
+             dock gets (activity row, queued chips, a multi-line draft). -->
+        <button class="jump-btn" id="jump-btn" type="button" hidden>
+          <span data-icon="arrow-down"></span><span>Latest</span><span class="jump-count" id="jump-count" hidden></span>
+        </button>
+        <div class="dock-chips" id="dock-chips">
+          <div class="chip-slot" id="wait-chip"></div>
+          <div class="chip-slot" id="mcp-chip"></div>
+          <div class="chip-slot" id="changes-chip"></div>
+          <div class="chip-slot" id="queue-chips"></div>
+        </div>
+        <section class="queue-panel glass" id="queue-panel" aria-label="Queued messages" hidden></section>
+        <div class="composer glass" id="composer">
+          <div class="slash-menu glass-strong" id="slash-menu" role="listbox" hidden></div>
+          <div class="activity" id="activity" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <span class="activity-text" id="activity-text">Working</span>
+            <span class="activity-time" id="activity-time"></span>
+          </div>
+          <div class="att-note" id="att-note" role="status" hidden></div>
+          <div class="att-tray" id="att-tray" role="list" aria-label="Attached files" hidden></div>
+          <textarea id="prompt" rows="1" placeholder="Message Arkad, or type / for commands" autocomplete="off" aria-label="Message"></textarea>
+          <input type="file" id="att-input" multiple hidden tabindex="-1" aria-hidden="true">
+          <div class="composer-tools">
+            <button class="tool-chip is-icon" id="qc-attach" type="button" title="Attach photos, video, PDFs or files" aria-label="Attach files">
+              <span data-icon="paperclip"></span>
+            </button>
+            <button class="tool-chip" id="qc-model" type="button" title="Switch model">
+              <span data-icon="cpu"></span><span class="tc-text" id="qc-model-text">Model</span>
+            </button>
+            <div class="tc-wrap">
+              <button class="tool-chip" id="qc-effort" type="button" aria-haspopup="menu" aria-expanded="false" title="Thinking effort">
+                <span data-icon="brain"></span><span class="tc-text" id="qc-effort-text">High</span><span class="tc-chev" data-icon="chevron-down"></span>
+              </button>
+              <div class="effort-menu" id="effort-menu" role="menu" hidden></div>
+            </div>
+            <button class="tool-chip" id="qc-agent" type="button" title="Switch agent">
+              <span data-icon="sparkles"></span><span class="tc-text" id="qc-agent-text">Agent</span>
+            </button>
+            <button class="tool-chip is-icon" id="qc-trace" type="button" aria-pressed="false" title="Tool trace">
+              <span data-icon="list-tree"></span>
+            </button>
+            <button class="tool-chip is-icon is-warn" id="qc-auto" type="button" aria-pressed="false" title="Auto-approve shell commands">
+              <span data-icon="shield"></span>
+            </button>
+            <span class="tc-spacer"></span>
+            <button class="tool-chip enhance-chip" id="qc-enhance" type="button" data-mode="idle" title="Fix spelling and grammar with the current model" aria-label="Enhance prompt" hidden>
+              <span class="en-ic" data-icon="wand-sparkles"></span><span class="tc-text" id="qc-enhance-text">Enhance</span>
+            </button>
+            <button class="send-btn" id="send" type="button" aria-label="Send">
+              <span class="send-ic" data-icon="arrow-up"></span>
+              <span class="stop-ic" data-icon="square"></span>
+            </button>
+          </div>
+        </div>
+        <p class="composer-hint">
+          <span><kbd>Enter</kbd> send</span>
+          <span><kbd>Shift</kbd><kbd>Enter</kbd> new line</span>
+          <span><kbd>↑</kbd> last message</span>
+          <span><kbd>/</kbd> commands</span>
+          <span><kbd class="kbd-alt">Alt</kbd><kbd>E</kbd> enhance</span>
+        </p>
+      </div>
+    </main>
+
+    <aside class="inspector glass" id="inspector" aria-label="Changes and activity" aria-hidden="true" inert>
+      <div class="insp-resize" id="insp-resize" role="separator" aria-orientation="vertical" aria-label="Resize panel" tabindex="0"></div>
+      <header class="insp-head" id="insp-head">
+        <div class="insp-tabs" id="insp-tabs" role="tablist" aria-label="Panel">
+          <button class="insp-tab is-active" id="tab-changes" type="button" role="tab" aria-selected="true" aria-controls="pane-changes" data-tab="changes">
+            <span data-icon="file-diff"></span><span>Changes</span><span class="tab-count" id="tab-count-changes" hidden>0</span>
+          </button>
+          <button class="insp-tab" id="tab-activity" type="button" role="tab" aria-selected="false" aria-controls="pane-activity" data-tab="activity" tabindex="-1">
+            <span data-icon="activity"></span><span>Activity</span><span class="tab-dot" id="tab-dot-activity" hidden></span>
+          </button>
+        </div>
+        <button class="icon-btn only-roomy" id="insp-expand" type="button" aria-pressed="false" aria-label="Make the panel wider" title="Wider"><span data-icon="maximize-2"></span></button>
+        <button class="icon-btn" id="insp-close" type="button" aria-label="Close panel" title="Close"><span data-icon="x"></span></button>
+      </header>
+
+      <div class="insp-body">
+        <section class="insp-pane is-active" id="pane-changes" role="tabpanel" aria-labelledby="tab-changes">
+          <div class="chg-top" id="chg-top" hidden>
+            <div class="chg-summary">
+              <div class="chg-headline">
+                <strong id="chg-files" aria-live="polite" aria-atomic="true">0 files changed</strong>
+                <span class="chg-nums"><b class="num-add" id="chg-add">+0</b><b class="num-del" id="chg-del">−0</b><span class="chg-since">this session</span></span>
+              </div>
+              <div class="chg-tools" role="toolbar" aria-label="Diff options">
+                <button class="tool-icon" id="chg-follow" type="button" aria-pressed="true" aria-label="Follow along" title="Follow along: open each file as Arkad changes it"><span data-icon="radio"></span></button>
+                <button class="tool-icon" id="chg-wrap" type="button" aria-pressed="false" aria-label="Wrap long lines" title="Wrap long lines"><span data-icon="wrap-text"></span></button>
+                <button class="tool-icon only-roomy" id="chg-view" type="button" aria-pressed="false" aria-label="Side by side" title="Side by side"><span data-icon="columns-2"></span></button>
+                <button class="tool-icon" id="chg-fold" type="button" aria-label="Expand all" title="Expand all"><span data-icon="chevrons-up-down"></span></button>
+                <button class="tool-icon" id="chg-patch" type="button" aria-label="Copy everything as a patch" title="Copy as patch (git apply)"><span data-icon="copy"></span></button>
+              </div>
+            </div>
+            <div class="chg-ratio" id="chg-ratio" aria-hidden="true"><i class="r-add"></i><i class="r-del"></i></div>
+            <div class="chg-filters" id="chg-filters" role="group" aria-label="Show" hidden></div>
+          </div>
+          <div class="chg-scroll" id="chg-scroll">
+            <div class="chg-list" id="chg-list" role="list"></div>
+            <div class="chg-empty" id="chg-empty">
+              <span class="chg-empty-ic" data-icon="file-diff"></span>
+              <h3>No file changes yet</h3>
+              <p>Files Arkad creates, edits, renames or deletes show up here as they happen, each with a live diff.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="insp-pane" id="pane-activity" role="tabpanel" aria-labelledby="tab-activity" inert>
+          <div class="act-scroll" id="act-scroll">
+            <div class="act-now" id="act-now"></div>
+            <div class="act-card" id="act-jobs" hidden></div>
+            <div class="act-card" id="act-mix"></div>
+            <div class="act-card" id="act-timeline"></div>
+          </div>
+        </section>
+      </div>
+    </aside>
+    <div class="insp-scrim" id="insp-scrim"></div>
+  </div>
+
+  <div class="modal" id="palette" hidden>
+    <div class="modal-card glass-strong palette-card" role="dialog" aria-modal="true" aria-label="Commands">
+      <div class="search-row">
+        <span data-icon="search"></span>
+        <input id="palette-input" type="text" placeholder="Search commands, pickers and settings" autocomplete="off" spellcheck="false" aria-label="Search commands">
+        <kbd>Esc</kbd>
+      </div>
+      <div class="modal-list" id="palette-list" role="listbox"></div>
+      <div class="modal-foot hints"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> run</span></div>
+    </div>
+  </div>
+
+  <div class="modal" id="picker" hidden>
+    <div class="modal-card glass-strong picker-card dlg-card" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+      <div class="picker-head">
+        <button class="icon-btn dlg-back" type="button" hidden aria-label="Back"><span data-icon="arrow-left"></span></button>
+        <span class="picker-icon" id="picker-icon"></span>
+        <div class="picker-titles">
+          <h2 id="picker-title">Select</h2>
+          <p id="picker-sub"></p>
+        </div>
+        <button class="icon-btn" id="picker-close" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="dlg-bar">
+        <div class="dlg-toolbar">
+          <label class="dlg-search">
+            <span class="dlg-search-ic"><span data-icon="search"></span></span>
+            <input id="picker-search" type="search" placeholder="Search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Search" enterkeyhint="go">
+            <span class="dlg-kbd" aria-hidden="true"><kbd>↑</kbd><kbd>↓</kbd><kbd>↵</kbd></span>
+          </label>
+          <span class="search-extra" id="picker-search-extra"></span>
+          <span class="dlg-action-slot" id="picker-action"></span>
+        </div>
+      </div>
+      <div class="modal-list dlg-body" id="picker-list" role="listbox"></div>
+      <div class="picker-detail dlg-body" id="picker-detail" hidden></div>
+      <div class="dlg-foot" id="picker-foot"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="qr" hidden>
+    <div class="modal-card glass-strong qr-card" role="dialog" aria-modal="true" aria-labelledby="qr-title">
+      <div class="picker-head">
+        <span class="picker-icon"><span data-icon="qr-code"></span></span>
+        <div class="picker-titles">
+          <h2 id="qr-title">Open on your phone</h2>
+          <p id="qr-sub">Scan with your camera to continue this session</p>
+        </div>
+        <button class="icon-btn" data-close="qr" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="qr-body">
+        <div class="qr-frame" id="qr-frame" aria-live="polite"></div>
+        <p class="qr-url" id="qr-url"></p>
+        <p class="qr-note" id="qr-note"></p>
+        <button class="btn" id="qr-copy" type="button"><span data-icon="link"></span> Copy link</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="providers" hidden>
+    <div class="modal-card glass-strong providers-card dlg-card" role="dialog" aria-modal="true" aria-labelledby="providers-title">
+      <div class="picker-head">
+        <button class="icon-btn dlg-back" type="button" hidden aria-label="Back"><span data-icon="arrow-left"></span></button>
+        <span class="picker-icon"><span data-icon="key-round"></span></span>
+        <div class="picker-titles">
+          <h2 id="providers-title">Providers</h2>
+          <p id="providers-sub">Sign in or paste an API key. Saved on your computer.</p>
+        </div>
+        <button class="icon-btn" data-close="providers" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="dlg-bar" id="providers-bar"></div>
+      <div class="pv-body dlg-body" id="providers-body"></div>
+      <div class="dlg-foot" id="providers-foot"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="mcp" hidden>
+    <div class="modal-card glass-strong ext-card dlg-card" role="dialog" aria-modal="true" aria-labelledby="mcp-title">
+      <div class="picker-head">
+        <button class="icon-btn dlg-back" type="button" hidden aria-label="Back"><span data-icon="arrow-left"></span></button>
+        <span class="picker-icon"><span data-icon="plug"></span></span>
+        <div class="picker-titles">
+          <h2 id="mcp-title">MCP servers</h2>
+          <p id="mcp-sub">Tool servers Arkad can call</p>
+        </div>
+        <button class="icon-btn" data-close="mcp" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="dlg-tabs" id="mcp-tabs"></div>
+      <div class="dlg-bar" id="mcp-bar"></div>
+      <div class="pv-body dlg-body ex-body" id="mcp-body"></div>
+      <div class="dlg-foot" id="mcp-foot"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="skills" hidden>
+    <div class="modal-card glass-strong ext-card dlg-card" role="dialog" aria-modal="true" aria-labelledby="skills-title">
+      <div class="picker-head">
+        <button class="icon-btn dlg-back" type="button" hidden aria-label="Back"><span data-icon="arrow-left"></span></button>
+        <span class="picker-icon"><span data-icon="book-open"></span></span>
+        <div class="picker-titles">
+          <h2 id="skills-title">Skills</h2>
+          <p id="skills-sub">Arkad loads a skill when a task matches it</p>
+        </div>
+        <button class="icon-btn" data-close="skills" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="dlg-bar" id="skills-bar"></div>
+      <div class="pv-body dlg-body ex-body" id="skills-body"></div>
+      <div class="dlg-foot" id="skills-foot"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="commands" hidden>
+    <div class="modal-card glass-strong ext-card cm-card dlg-card" role="dialog" aria-modal="true" aria-labelledby="commands-title">
+      <div class="picker-head">
+        <button class="icon-btn dlg-back" type="button" hidden aria-label="Back"><span data-icon="arrow-left"></span></button>
+        <span class="picker-icon"><span data-icon="terminal"></span></span>
+        <div class="picker-titles">
+          <h2 id="commands-title">Commands</h2>
+          <p id="commands-sub">Prompts you reuse, one /name away</p>
+        </div>
+        <button class="icon-btn" data-close="commands" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="dlg-bar" id="commands-bar"></div>
+      <div class="pv-body dlg-body ex-body" id="commands-body"></div>
+      <div class="dlg-foot" id="commands-foot"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="pin" hidden>
+    <div class="modal-card glass-strong ext-card pin-card dlg-card" role="dialog" aria-modal="true" aria-labelledby="pin-title">
+      <div class="picker-head">
+        <button class="icon-btn dlg-back" type="button" hidden aria-label="Back"><span data-icon="arrow-left"></span></button>
+        <span class="picker-icon"><span data-icon="pin"></span></span>
+        <div class="picker-titles">
+          <h2 id="pin-title">Pinned context</h2>
+          <p id="pin-sub-title">Sent with every message, in every chat</p>
+        </div>
+        <button class="icon-btn" data-close="pin" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="dlg-bar" id="pin-bar"></div>
+      <div class="pv-body dlg-body ex-body" id="pin-body"></div>
+      <div class="dlg-foot" id="pin-foot"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="appearance" hidden>
+    <div class="modal-card glass-strong small-card" role="dialog" aria-modal="true" aria-labelledby="appearance-title">
+      <div class="picker-head">
+        <span class="picker-icon"><span data-icon="palette"></span></span>
+        <div class="picker-titles">
+          <h2 id="appearance-title">Appearance</h2>
+          <p>Saved in this browser</p>
+        </div>
+        <button class="icon-btn" data-close="appearance" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="settings-body">
+      <div class="setting-block">
+        <h3 class="setting-label">Mode</h3>
+        <div class="mode-grid" id="mode-grid" role="radiogroup" aria-label="Color mode"></div>
+        <label class="switch-row soft-row" for="sw-soft">
+          <span class="sw-icon" data-icon="contrast"></span>
+          <span class="sw-text"><strong>Soft contrast</strong><span id="soft-sub">Warm paper in light, charcoal in dark</span></span>
+          <input type="checkbox" class="switch" id="sw-soft" role="switch">
+        </label>
+        <label class="switch-row soft-row" for="sw-glass">
+          <span class="sw-icon" data-icon="blend"></span>
+          <span class="sw-text"><strong>Frosted glass</strong><span id="glass-sub">Translucent panels; messages scroll under them</span></span>
+          <input type="checkbox" class="switch" id="sw-glass" role="switch">
+        </label>
+      </div>
+      <div class="setting-block">
+        <h3 class="setting-label">Accent</h3>
+        <div class="accent-grid" id="accent-grid" role="radiogroup" aria-label="Accent color"></div>
+        <div class="hue-row" id="hue-row">
+          <input type="range" class="hue-bar" id="accent-hue" min="0" max="359" step="1" value="258" aria-label="Custom accent colour: drag along the colour bar">
+          <label class="hue-exact" title="Pick an exact colour">
+            <input type="color" id="accent-exact" value="#a78bfa" aria-label="Pick an exact accent colour">
+            <span data-icon="pipette" aria-hidden="true"></span>
+          </label>
+        </div>
+        <p class="hue-hint">Drag the bar for any colour. It's kept readable in light and dark.</p>
+      </div>
+      <div class="setting-block">
+        <h3 class="setting-label">This device</h3>
+        <label class="switch-row" for="sw-alert">
+          <span class="sw-icon" data-icon="bell"></span>
+          <span class="sw-text"><strong>Alert when a reply is ready</strong><span id="alert-sub">While this tab is in the background</span></span>
+          <input type="checkbox" class="switch" id="sw-alert" role="switch">
+        </label>
+        <label class="switch-row" for="sw-compact">
+          <span class="sw-icon" data-icon="rows-3"></span>
+          <span class="sw-text"><strong>Compact transcript</strong><span>Tighter spacing, smaller text</span></span>
+          <input type="checkbox" class="switch" id="sw-compact" role="switch">
+        </label>
+      </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="shortcuts" hidden>
+    <div class="modal-card glass-strong small-card" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+      <div class="picker-head">
+        <span class="picker-icon"><span data-icon="keyboard"></span></span>
+        <div class="picker-titles">
+          <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+          <p>Press <kbd>?</kbd> any time to see these</p>
+        </div>
+        <button class="icon-btn" data-close="shortcuts" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="shortcut-list" id="shortcut-list"></div>
+    </div>
+  </div>
+
+  <div class="modal modal-prompt" id="prompt-modal" hidden>
+    <div class="modal-card glass-strong prompt-card" id="prompt-card" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div class="modal" id="tool-output-modal" hidden>
+    <div class="modal-card glass-strong tool-output-card" role="dialog" aria-modal="true" aria-labelledby="tool-output-title">
+      <div class="picker-head">
+        <span class="picker-icon" id="tool-output-icon"><span data-icon="terminal"></span></span>
+        <div class="picker-titles">
+          <h2 id="tool-output-title">Full output</h2>
+          <p id="tool-output-sub">Loading…</p>
+        </div>
+        <button class="icon-btn" data-close="tool-output-modal" type="button" aria-label="Close"><span data-icon="x"></span></button>
+      </div>
+      <div class="tool-output-meta" id="tool-output-meta" hidden></div>
+      <div class="tool-output-scroll" id="tool-output-scroll" tabindex="0">
+        <pre class="tool-output-body" id="tool-output-body">Loading…</pre>
+      </div>
+      <div class="modal-foot">
+        <span class="picker-foot-note" id="tool-output-note"></span>
+        <span class="spacer"></span>
+        <button class="row-btn" id="tool-output-copy" type="button">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="drop-zone" id="drop-zone" hidden>
+    <div class="drop-card">
+      <span class="drop-ic" data-icon="upload"></span>
+      <strong>Drop to attach</strong>
+      <span id="drop-sub">Images, video, audio, PDFs and documents</span>
+    </div>
+  </div>
+
+  <div class="modal viewer" id="viewer" hidden>
+    <div class="modal-card viewer-card" role="dialog" aria-modal="true" aria-labelledby="viewer-name">
+      <header class="viewer-bar">
+        <div class="viewer-titles">
+          <strong id="viewer-name">Attachment</strong>
+          <span id="viewer-meta"></span>
+        </div>
+        <span class="viewer-count" id="viewer-count" aria-live="polite"></span>
+        <button class="icon-btn" id="viewer-zoom" type="button" aria-pressed="false" aria-label="Actual size" title="Actual size (Z)"><span data-icon="zoom-in"></span></button>
+        <a class="icon-btn" id="viewer-open" href="#" target="_blank" rel="noopener" aria-label="Open in a new tab" title="Open in a new tab"><span data-icon="external-link"></span></a>
+        <a class="icon-btn" id="viewer-download" href="#" download aria-label="Download" title="Download"><span data-icon="download"></span></a>
+        <button class="icon-btn" id="viewer-close" data-close="viewer" type="button" aria-label="Close" title="Close (Esc)"><span data-icon="x"></span></button>
+      </header>
+      <div class="viewer-stage" id="viewer-stage"></div>
+      <button class="viewer-nav is-prev" id="viewer-prev" type="button" aria-label="Previous" title="Previous (←)"><span data-icon="chevron-left"></span></button>
+      <button class="viewer-nav is-next" id="viewer-next" type="button" aria-label="Next" title="Next (→)"><span data-icon="chevron-right"></span></button>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <button type="button" class="quote-pill" id="quote-pill" aria-label="Quote the selected text in a new message">
+    <span data-icon="quote" aria-hidden="true"></span><span>Quote</span>
+  </button>
+
+  <script type="module" src="/static/js/app.js"></script>
+  <script>
+    // Boot watchdog: if any module failed to download (flaky Wi-Fi, a busy
+    // server), app.js never runs and the page would sit on "Connecting…"
+    // forever. Reload up to twice, then say what happened.
+    setTimeout(function () {
+      if (window.arkadRemote || !document.getElementById('gate').hidden) return;
+      var key = 'arkad-boot-retry', tries = 0;
+      try { tries = Number(sessionStorage.getItem(key) || 0); } catch (e) {}
+      if (tries < 2) {
+        try { sessionStorage.setItem(key, String(tries + 1)); } catch (e) {}
+        location.reload();
+        return;
+      }
+      try { sessionStorage.removeItem(key); } catch (e) {}
+      document.getElementById('gate-title').textContent = 'The page did not finish loading';
+      document.getElementById('gate-text').textContent = 'Some files could not be downloaded from Arkad. Check that Arkad is still running and that this device is on the same network, then try again.';
+      document.getElementById('gate').hidden = false;
+    }, 6000);
+  </script>
+</body>
+</html>
