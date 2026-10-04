@@ -184,6 +184,7 @@ class WelcomeBlock(Block):
                         parsed = json.loads(line)
                         if {"ram_used_gb", "ram_total_gb", "cpu_pct"} <= parsed.keys():
                             self._stats = parsed
+                            self._stats_raw = line
                             break
                     except (ValueError, AttributeError):
                         continue
@@ -265,42 +266,114 @@ class WelcomeBlock(Block):
     def render(self) -> Text:
         i = self.info
         out = Text()
-        width = max(len(line) for line in _LOGO)
-        band = None
-        if self._shine_t0 is not None:
-            p = (time.monotonic() - self._shine_t0) / self.SHINE_SECS
-            band = -6 + p * (width + 12)
-        for row, line in enumerate(_LOGO):
-            if row:
-                out.append("\n")
-            for col, ch in enumerate(line):
-                if ch == " ":
-                    out.append(" ")
-                    continue
-                t = col / max(1, width - 1)
-                color = ui.blend(ui.ACCENT, ui.ACCENT_3, t)
-                if band is not None:
-                    k = max(0.0, 1.0 - abs(col + row * 2 - band) / 3.5)
-                    color = ui.blend(color, "#ffffff", 0.75 * k)
-                out.append(ch, style=f"bold {color}")
-            out.append("   ")
-            if row == 0:
-                out.append(f"v{i.get('version', '')}", style=ui.FG_DIM)
-            else:
-                # Where you are. Model / provider / agent live in the footer.
-                out.append(_short_path(str(i.get("cwd", ""))), style=f"bold {ui.FG}")
-                if i.get("branch"):
-                    out.append("  ⎇ ", style=ui.FG_DIM)
-                    out.append(_clip(str(i["branch"]), 32), style=ui.ACCENT_2)
-        out.append("\n\n")
-        out.append_text(self._stats_line())
+
+        # ── live values (Rust daemon first, /proc fallback) ──────────────
+        stats = self._pump_rust_stats()
+        if stats is not None:
+            used, total, cpu = stats["ram_used_gb"], stats["ram_total_gb"], stats["cpu_pct"]
+            uptime = stats.get("uptime_secs", 0.0)
+            net_ok = stats.get("net_ok", True)
+        else:
+            used, total = self._ram_stats()
+            cpu = self._cpu_pct()
+            try:
+                uptime = float(open("/proc/uptime").read().split()[0])
+            except Exception:
+                uptime = 0.0
+            try:
+                from pathlib import Path as _P
+
+                net_ok = any(
+                    (_P(f"/sys/class/net/{n}/operstate").read_text().strip() == "up")
+                    for n in os.listdir("/sys/class/net") if n != "lo"
+                )
+            except Exception:
+                net_ok = True
+        ram_fill = max(0, min(8, int(used / total * 8))) if total else 0
+        cpu_fill = max(0, min(4, int(cpu / 25)))
+        up = int(uptime)
+        uptime_s = f"{up // 3600}:{(up % 3600) // 60:02d}:{up % 60:02d}"
+
+        # ── top status bar ───────────────────────────────────────────────
+        out.append("╔" + "═" * 78 + "╗\n", style=ui.BORDER_FC)
+        status = Text()
+        status.append("⚡ LINK: SECURE " if net_ok else "⚡ LINK: OFFLINE ",
+                      style=f"bold {ui.OK if net_ok else ui.ERR}")
+        status.append("│ ", style=ui.FG_DIM)
+        status.append(("▒" * ram_fill + "░" * (8 - ram_fill)) + f" RAM {used:.0f}G/{total:.0f}G ", style=ui.ACCENT)
+        status.append("│ ", style=ui.FG_DIM)
+        status.append(("▇" * cpu_fill + "░" * (4 - cpu_fill)) + f" CPU {cpu:.0f}% ", style=ui.ACCENT_2)
+        status.append("│ ", style=ui.FG_DIM)
+        status.append(f"UPTIME: {uptime_s} ", style=ui.ACCENT_3)
+        out.append("║ ", style=ui.BORDER_FC)
+        out.append_text(status)
+        out.append(" " * max(0, 78 - len(str(status)) - 1))
+        out.append("║\n", style=ui.BORDER_FC)
+        out.append("╟" + "─" * 78 + "╢\n", style=ui.BORDER_FC)
+
+        # ── left pane: real cwd tree + hex of the latest daemon payload ──
+        try:
+            entries = sorted(os.listdir("."), key=lambda n: (not os.path.isdir(n), n.lower()))
+            entries = [n for n in entries if not n.startswith(".")][:6]
+        except Exception:
+            entries = []
+        tree = ["├─ " + (n + "/" if os.path.isdir(n) else n) for n in entries]
+        if tree:
+            tree[-1] = tree[-1].replace("├─", "└─", 1)
+        left = ["┌─[ ROOT_DIR ]─────┐"]
+        left += [f"│ {_clip(t, 17):<17}│" for t in (tree or ["(empty)"])]
+        while len(left) < 1 + 6:
+            left.append("│ " + " " * 17 + "│")
+        left.append("├─[ HEX_STREAM ]───┤")
+        raw = getattr(self, "_stats_raw", "") or f"{uptime_s} {used:.0f}G {cpu:.0f}%"
+        data = raw.encode()[:25]
+        hexrows = [" ".join(f"{b:02X}" for b in data[k:k + 5]) for k in range(0, 25, 5)]
+        while len(hexrows) < 5:
+            hexrows.append("")
+        left += [f"│ {h:<17}│" for h in hexrows]
+        left.append("└" + "─" * 18 + "┘")
+
+        # ── right pane: render view ──────────────────────────────────────
+        title = f"RENDER_VIEW : {os.path.basename(os.getcwd()).upper() or 'HOME'}"
+        right_top = "┌─[ " + title + " ]" + "─" * max(0, 53 - len(title) - 5) + "┐"
+        body = [
+            "",
+            f"  v{i.get('version', '')}  {_clip(str(i.get('cwd', '')), 48)}",
+            "",
+        ]
+        if i.get("branch"):
+            body.append(f"  ⎇ {_clip(str(i['branch']), 48)}")
+            body.append("")
         ctx = [c for c in (i.get("context") or []) if c]
         if ctx:
-            out.append("\n\n  ")
-            for n, bit in enumerate(ctx):
-                if n:
-                    out.append(" · ", style=ui.FG_DIM)
-                out.append(bit, style=ui.FG_DIM)
+            body.append("  " + " · ".join(ctx[:4]))
+            body.append("")
+        body.append("  / commands · @ files · ! shell · tab agents")
+        while len(body) < len(left) - 2:
+            body.append("")
+        right = [right_top] + ["│" + b.ljust(53) + "│" for b in body[: len(left) - 2]] + ["└" + "─" * 53 + "┘"]
+
+        for n in range(len(left)):
+            out.append("║ ", style=ui.BORDER_FC)
+            lt = left[n] if n < len(left) else " " * 19
+            out.append(lt, style=ui.ACCENT if n in (0, 7, len(left) - 1) else ui.FG_DIM)
+            out.append(" ")
+            rt = right[n] if n < len(right) else " " * 55
+            out.append(rt, style=ui.ACCENT_2 if n == 0 else ui.FG_MUTE)
+            out.append(" ║\n", style=ui.BORDER_FC)
+        out.append("╚" + "═" * 78 + "╝\n", style=ui.BORDER_FC)
+
+        try:
+            import getpass, socket
+
+            host = socket.gethostname().split(".")[0]
+            user = getpass.getuser()
+        except Exception:
+            user, host = "harness", "cybernode"
+        out.append(f"  {user}@{host}:~$ ", style=f"bold {ui.ACCENT}")
+        out.append("█", style=f"bold {ui.ACCENT_2}")
+
+        ctx = [c for c in (i.get("context") or []) if c]
         if i.get("warning"):
             out.append("\n\n  ")
             out.append("● ", style=ui.WARN)

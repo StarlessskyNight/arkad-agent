@@ -57,10 +57,25 @@ fn main() {
             0.0
         };
         let (used, total) = ram_gb();
+        let uptime = fs::read_to_string("/proc/uptime")
+            .ok()
+            .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let net_ok = fs::read_dir("/sys/class/net")
+            .map(|d| {
+                d.filter_map(|e| e.ok())
+                    .filter(|e| e.file_name() != "lo")
+                    .any(|e| {
+                        fs::read_to_string(e.path().join("operstate"))
+                            .map(|s| s.trim() == "up")
+                            .unwrap_or(false)
+                    })
+            })
+            .unwrap_or(false);
         let _ = writeln!(
             out,
-            "{{\"ram_used_gb\":{:.1},\"ram_total_gb\":{:.1},\"cpu_pct\":{:.1}}}",
-            used, total, cpu
+            "{{\"ram_used_gb\":{:.1},\"ram_total_gb\":{:.1},\"cpu_pct\":{:.1},\"uptime_secs\":{:.0},\"net_ok\":{}}}",
+            used, total, cpu, uptime, net_ok
         );
         let _ = out.flush();
     }
