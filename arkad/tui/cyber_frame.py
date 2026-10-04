@@ -231,19 +231,10 @@ class CyberFrame(Widget):
             return
         event.input.clear()
         app = self.app
-        # restore the normal composer
-        try:
-            app.query_one("#composer", Horizontal).display = True
-        except Exception:
-            pass
         routed = self._route(text)
         from .prompt_area import PromptArea
 
         app.on_prompt_area_submitted(PromptArea.Submitted(routed))
-        try:
-            self.remove()
-        except Exception:
-            pass
 
     @staticmethod
     def _route(text: str) -> str:
