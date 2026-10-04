@@ -491,9 +491,10 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
 
     def _mount_welcome(self) -> None:
         # Always called on an empty (or just-cleared) transcript.
-        welcome = WelcomeBlock(self._welcome_info())
+        from .cyber_frame import CyberFrame
+
+        welcome = CyberFrame(self._welcome_info())
         self.query_one("#transcript", Transcript).mount(welcome)
-        self.call_after_refresh(welcome.start_shine)
         if state.update_result:
             info = state.update_result
             count = info.get("count", 0)
