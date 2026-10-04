@@ -47,7 +47,7 @@ run_remote_install() {
   echo "==> log:           ${LOG_FILE}"
   echo
 
-  curl -fsSL "https://raw.githubusercontent.com/PrajsRamteke/arkad-agent/${ARKAD_BRANCH}/scripts/install" \
+  curl -fsSL "https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/${ARKAD_BRANCH}/scripts/install" \
     | bash 2>&1 | tee "${LOG_FILE}"
 }
 
@@ -139,7 +139,7 @@ run_docker() {
       export HOME=/root
       export ARKAD_INSTALL_DIR=/opt/arkad-test
       export ARKAD_BIN_DIR=/usr/local/bin
-      curl -fsSL "https://raw.githubusercontent.com/PrajsRamteke/arkad-agent/${ARKAD_BRANCH}/scripts/install" | bash
+      curl -fsSL "https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/${ARKAD_BRANCH}/scripts/install" | bash
       arkad --help >/dev/null
       /opt/arkad-test/.venv/bin/python -c "import openai, anthropic, arkad; print(\"imports OK\")"
       echo "PASS: docker install test succeeded"

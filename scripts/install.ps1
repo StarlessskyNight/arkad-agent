@@ -1,6 +1,6 @@
 # Arkad installer for Windows (PowerShell 5.1+). The Windows twin of scripts/install.
 #
-#   powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/PrajsRamteke/arkad-agent/main/scripts/install.ps1 | iex"
+#   powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/install.ps1 | iex"
 #
 # Rerun it to update. Same knobs as scripts/install:
 #   ARKAD_REPO_URL, ARKAD_BRANCH, ARKAD_INSTALL_DIR, ARKAD_BIN_DIR, PYTHON
@@ -9,7 +9,7 @@
 # or functions behind in the caller's session, and a `throw` stops the install
 # without closing the window.
 & {
-    $RepoUrl    = if ($env:ARKAD_REPO_URL)    { $env:ARKAD_REPO_URL }    else { 'https://github.com/PrajsRamteke/arkad-agent.git' }
+    $RepoUrl    = if ($env:ARKAD_REPO_URL)    { $env:ARKAD_REPO_URL }    else { 'https://github.com/StarlessskyNight/arkad-agent.git' }
     $Branch     = if ($env:ARKAD_BRANCH)      { $env:ARKAD_BRANCH }      else { 'main' }
     $InstallDir = if ($env:ARKAD_INSTALL_DIR) { $env:ARKAD_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'arkad-agent' }
     $BinDir     = if ($env:ARKAD_BIN_DIR)     { $env:ARKAD_BIN_DIR }     else { Join-Path $HOME '.local\bin' }

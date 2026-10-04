@@ -9,6 +9,34 @@ Requires Python 3.10+.
 
 ## Install
 
+Linux / macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/install | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/install.ps1 | iex"
+```
+
+Uninstall (keeps your config/data):
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/uninstall | bash
+```
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/uninstall.ps1 | iex"
+```
+
+Add `--purge` (bash) / `-Purge` (PowerShell) to also delete config and data.
+
+From a checkout:
+
 ```bash
 # from a checkout
 cd arkad-agent

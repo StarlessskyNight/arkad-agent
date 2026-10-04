@@ -75,7 +75,7 @@ def cmd_upgrade(arg: str) -> bool:
             "  [dim]# If installed via the installer:[/]\n"
             f"  [cyan]{pathlib.Path('~/.local/share/arkad-agent').expanduser()}[/] not found.\n\n"
             "  [dim]# Try running the install script again:[/]\n"
-            "  [cyan]curl -fsSL https://raw.githubusercontent.com/PrajsRamteke/arkad-agent/main/scripts/install | bash[/]\n\n"
+            "  [cyan]curl -fsSL https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/install | bash[/]\n\n"
             "  [dim]# If in a dev clone:[/]\n"
             "  cd /path/to/arkad && git pull && pip install -e .\n"
         )

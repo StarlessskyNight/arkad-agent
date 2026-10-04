@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Uninstall Arkad Agent: removes the install dir and the `arkad-agent` symlink.
+#   curl -fsSL https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/uninstall | bash
+# Pass --purge to also delete config/data (~/.config/arkad-agent, ~/.arkad).
+set -euo pipefail
+
+INSTALL_DIR="${ARKAD_INSTALL_DIR:-${HOME}/.local/share/arkad-agent}"
+PURGE=0
+for arg in "$@"; do
+  [ "$arg" = "--purge" ] && PURGE=1
+done
+
+# Remove the bin symlink wherever the installer could have put it.
+for dir in "${HOME}/.local/bin" "/opt/homebrew/bin" "/usr/local/bin" "${ARKAD_BIN_DIR:-}"; do
+  [ -z "$dir" ] && continue
+  link="${dir}/arkad-agent"
+  if [ -L "$link" ]; then
+    rm -f "$link"
+    echo "removed $link"
+  fi
+  link="${dir}/arkad"
+  if [ -L "$link" ] && [ "$(readlink "$link")" = "${INSTALL_DIR}/.venv/bin/arkad" ]; then
+    rm -f "$link"
+    echo "removed $link"
+  fi
+done
+
+if [ -d "${INSTALL_DIR}" ]; then
+  rm -rf "${INSTALL_DIR}"
+  echo "removed ${INSTALL_DIR}"
+else
+  echo "no install found at ${INSTALL_DIR}"
+fi
+
+if [ "${PURGE}" = "1" ]; then
+  rm -rf "${HOME}/.config/arkad-agent" "${HOME}/.arkad"
+  echo "purged ~/.config/arkad-agent and ~/.arkad"
+else
+  echo "kept config in ~/.config/arkad-agent and ~/.arkad (rerun with --purge to delete)"
+fi
+
+echo "Arkad Agent uninstalled."

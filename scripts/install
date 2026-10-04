@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${ARKAD_REPO_URL:-https://github.com/PrajsRamteke/arkad-agent.git}"
+REPO_URL="${ARKAD_REPO_URL:-https://github.com/StarlessskyNight/arkad-agent.git}"
 BRANCH="${ARKAD_BRANCH:-main}"
 INSTALL_DIR="${ARKAD_INSTALL_DIR:-${HOME}/.local/share/arkad-agent}"
 
