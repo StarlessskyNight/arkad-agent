@@ -143,12 +143,64 @@ class WelcomeBlock(Block):
         super().__init__()
         self.info = info
         self._shine_t0: float | None = None
+        self._last_cpu: tuple[int, int] | None = None
+
+    @staticmethod
+    def _ram_stats() -> tuple[float, float]:
+        """(used GB, total GB) from /proc/meminfo; (0, 0) when unavailable."""
+        try:
+            mem: dict[str, int] = {}
+            for line in open("/proc/meminfo"):
+                k, _, rest = line.partition(":")
+                mem[k] = int(rest.strip().split()[0])  # kB
+            total = mem["MemTotal"] / 1024 / 1024
+            avail = mem.get("MemAvailable", mem.get("MemFree", 0)) / 1024 / 1024
+            return total - avail, total
+        except Exception:
+            return 0.0, 0.0
+
+    def _cpu_pct(self) -> float:
+        try:
+            nums = [int(x) for x in open("/proc/stat").readline().split()[1:]]
+            idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+            total = sum(nums)
+            if self._last_cpu is None:
+                self._last_cpu = (total, idle)
+                return 0.0
+            dt = total - self._last_cpu[0]
+            di = idle - self._last_cpu[1]
+            self._last_cpu = (total, idle)
+            return 0.0 if dt <= 0 else max(0.0, min(100.0, (1 - di / dt) * 100))
+        except Exception:
+            try:
+                import os
+
+                return max(0.0, min(100.0, os.getloadavg()[0] / os.cpu_count() * 100))
+            except Exception:
+                return 0.0
+
+    def _stats_line(self) -> Text:
+        out = Text()
+        used, total = self._ram_stats()
+        cpu = self._cpu_pct()
+        out.append("  ")
+        if total > 0:
+            blocks = max(0, min(8, int(used / total * 8)))
+            out.append("▒" * blocks + "░" * (8 - blocks), style=ui.ACCENT)
+            out.append(f"  RAM {used:.0f}G/{total:.0f}G", style=ui.FG_MUTE)
+            out.append("   ")
+        cfill = max(0, min(4, int(cpu / 25)))
+        out.append("▇" * cfill + "░" * (4 - cfill), style=ui.ACCENT_2)
+        out.append(f"  CPU {cpu:.0f}%", style=ui.FG_MUTE)
+        return out
 
     def start_shine(self) -> None:
         """One diagonal light sweep across the wordmark after launch."""
         self._shine_t0 = time.monotonic()
         timer = self.set_interval(1 / 30, self._shine_tick)
         self._shine_timer = timer
+        # Live RAM/CPU tick.
+        self.set_interval(2.0, self.refresh)
 
     def _shine_tick(self) -> None:
         self.refresh()
@@ -190,6 +242,8 @@ class WelcomeBlock(Block):
                 if i.get("branch"):
                     out.append("  ⎇ ", style=ui.FG_DIM)
                     out.append(_clip(str(i["branch"]), 32), style=ui.ACCENT_2)
+        out.append("\n\n")
+        out.append_text(self._stats_line())
         ctx = [c for c in (i.get("context") or []) if c]
         if ctx:
             out.append("\n\n  ")
