@@ -3,12 +3,9 @@ and a real prompt input wired into the app's normal submit pipeline."""
 from __future__ import annotations
 
 import getpass
-import json
 import os
 import socket
-import subprocess
 import time
-from pathlib import Path
 from typing import Any
 
 from rich.text import Text
@@ -20,66 +17,45 @@ from textual.widgets import Input, Static, Tree
 
 from . import theme as ui
 
-_STATS_BIN = (
-    Path(__file__).resolve().parents[2]
-    / "rust" / "arkad-stats" / "target" / "release" / "arkad-stats"
-)
-
-
 class _SysStats:
-    """Pump the Rust arkad-stats daemon; parse the newest JSON line."""
+    """Pure-Python /proc reader for live RAM/CPU/uptime."""
 
     def __init__(self) -> None:
-        self.proc: subprocess.Popen | None = None
-        self.buf = ""
-        self.last: dict[str, Any] | None = None
+        self._last_cpu: tuple[int, int] | None = None
 
     def pump(self) -> dict[str, Any] | None:
         try:
-            if self.proc is None and _STATS_BIN.is_file():
-                self.proc = subprocess.Popen(
-                    [str(_STATS_BIN)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
-                )
-                os.set_blocking(self.proc.stdout.fileno(), False)
-            if self.proc is None or self.proc.stdout is None:
-                return None
-            try:
-                chunk = os.read(self.proc.stdout.fileno(), 65536)
-                if chunk:
-                    self.buf += chunk.decode(errors="replace")
-            except BlockingIOError:
-                pass
-            if "\n" in self.buf:
-                *lines, self.buf = self.buf.split("\n")
-                for line in reversed(lines):
-                    try:
-                        parsed = json.loads(line)
-                        if "ram_used_gb" in parsed and "cpu_pct" in parsed:
-                            self.last = parsed
-                            break
-                    except ValueError:
-                        continue
-            return self.last
-        except Exception:
-            return None
-
-    def fallback(self) -> dict[str, Any]:
-        used = total = 0.0
-        try:
-            mem = {}
+            mem: dict[str, int] = {}
             for line in open("/proc/meminfo"):
                 k, _, rest = line.partition(":")
-                mem[k] = int(rest.strip().split()[0])
+                mem[k] = int(rest.strip().split()[0])  # kB
             total = mem["MemTotal"] / 1024 / 1024
-            avail = mem.get("MemAvailable", 0) / 1024 / 1024
+            avail = mem.get("MemAvailable", mem.get("MemFree", 0)) / 1024 / 1024
             used = total - avail
         except Exception:
-            pass
+            used, total = 0.0, 0.0
         try:
             uptime = float(open("/proc/uptime").read().split()[0])
         except Exception:
             uptime = 0.0
-        return {"ram_used_gb": used, "ram_total_gb": total, "cpu_pct": 0.0, "uptime_secs": uptime, "net_ok": True}
+        try:
+            nums = [int(x) for x in open("/proc/stat").readline().split()[1:]]
+            idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+            total_j = sum(nums)
+            if self._last_cpu is None:
+                self._last_cpu = (total_j, idle)
+                cpu = 0.0
+            else:
+                dt = total_j - self._last_cpu[0]
+                di = idle - self._last_cpu[1]
+                self._last_cpu = (total_j, idle)
+                cpu = 0.0 if dt <= 0 else max(0.0, min(100.0, (1 - di / dt) * 100))
+        except Exception:
+            cpu = 0.0
+        return {"ram_used_gb": used, "ram_total_gb": total, "cpu_pct": cpu, "uptime_secs": uptime, "net_ok": True}
+
+    def fallback(self) -> dict[str, Any]:
+        return self.pump() or {"ram_used_gb": 0.0, "ram_total_gb": 0.0, "cpu_pct": 0.0, "uptime_secs": 0.0, "net_ok": True}
 
 
 class CyberFrame(Widget):

@@ -23,9 +23,7 @@ end re-attaches.
 """
 from __future__ import annotations
 
-import json
 import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -148,47 +146,25 @@ class WelcomeBlock(Block):
         self.info = info
         self._shine_t0: float | None = None
         self._last_cpu: tuple[int, int] | None = None
-        self._stats_proc: subprocess.Popen | None = None
-        self._stats_buf: str = ""
         self._stats: dict[str, float] | None = None
 
-    # ── live stats: prefer the Rust `arkad-stats` daemon (zero-delay JSON
-    # lines, one per second); fall back to direct /proc reads in Python.
-
-    _STATS_BIN = (
-        Path(__file__).resolve().parents[2]
-        / "rust" / "arkad-stats" / "target" / "release" / "arkad-stats"
-    )
+    # ── live stats: direct /proc reads in Python.
 
     def _pump_rust_stats(self) -> dict[str, float] | None:
         try:
-            if self._stats_proc is None and self._STATS_BIN.is_file():
-                self._stats_proc = subprocess.Popen(
-                    [str(self._STATS_BIN)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                )
-                os.set_blocking(self._stats_proc.stdout.fileno(), False)
-            if self._stats_proc is None or self._stats_proc.stdout is None:
-                return None
+            used, total = self._ram_stats()
+            cpu = self._cpu_pct()
             try:
-                chunk = os.read(self._stats_proc.stdout.fileno(), 65536)
-                if chunk:
-                    self._stats_buf += chunk.decode(errors="replace")
-            except BlockingIOError:
-                pass
-            if "\n" in self._stats_buf:
-                *lines, self._stats_buf = self._stats_buf.split("\n")
-                for line in reversed(lines):
-                    try:
-                        parsed = json.loads(line)
-                        if {"ram_used_gb", "ram_total_gb", "cpu_pct"} <= parsed.keys():
-                            self._stats = parsed
-                            self._stats_raw = line
-                            break
-                    except (ValueError, AttributeError):
-                        continue
-            return self._stats
+                uptime = float(open("/proc/uptime").read().split()[0])
+            except Exception:
+                uptime = 0.0
+            return {
+                "ram_used_gb": used,
+                "ram_total_gb": total,
+                "cpu_pct": cpu,
+                "uptime_secs": uptime,
+                "net_ok": True,
+            }
         except Exception:
             return None
 

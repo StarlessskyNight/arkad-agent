@@ -56,6 +56,3 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
-# Rust
-rust/target/
-rust/*/target/
