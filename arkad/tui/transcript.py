@@ -1138,6 +1138,30 @@ def soften(renderable: Any) -> Any:
     return renderable
 
 
+class FilePreviewBlock(Block):
+    """Renders a clicked file from the project tree: code/text highlighted,
+    PDFs extracted, images shown as a Braille ASCII preview."""
+
+    DEFAULT_CSS = """
+    FilePreviewBlock {
+        padding: 0 0 0 2;
+        margin: 0 0 1 0;
+        color: $jv-fg-mute;
+    }
+    """
+
+    def __init__(self, path: str, renderable) -> None:
+        super().__init__()
+        self.path = path
+        self.renderable = renderable
+
+    def plain_text(self) -> str:
+        return _plain(self.renderable)
+
+    def render(self):
+        return self.renderable
+
+
 class NoticeBlock(Block):
     """Plain console output (command results, status lines, errors).
 

@@ -196,6 +196,52 @@ class CyberFrame(Widget):
         except Exception:
             pass
 
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        data = event.node.data
+        if not data or data[0] != "file":
+            return
+        from .transcript import FilePreviewBlock, Transcript
+
+        path = data[1]
+        text = Text()
+        text.append(f"📄 {path}\n\n", style=f"bold {ui.ACCENT}")
+        try:
+            low = path.lower()
+            if low.endswith(".pdf"):
+                import pypdf
+
+                reader = pypdf.PdfReader(path)
+                body = reader.pages[0].extract_text()[:2000] if reader.pages else "(empty pdf)"
+                text.append(body, style=ui.FG_MUTE)
+            elif low.endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")):
+                from PIL import Image
+
+                im = Image.open(path).convert("L")
+                text.append(f"image: {im.size[0]}x{im.size[1]}\n", style=ui.FG_MUTE)
+                w = 48
+                h = max(1, int(im.size[1] / im.size[0] * w * 0.5))
+                im = im.resize((w, h))
+                chars = " .:-=+*#%@"
+                for y in range(h):
+                    row = ""
+                    for x in range(w):
+                        row += chars[min(9, im.getpixel((x, y)) * 10 // 256)]
+                    text.append(row + "\n", style=ui.ACCENT_2)
+            else:
+                from rich.syntax import Syntax
+
+                src = "\n".join(Path(path).read_text(errors="replace").splitlines()[:80])
+                block = FilePreviewBlock(
+                    path,
+                    Syntax(src, lexer=Path(path).suffix.lstrip(".") or "text", theme="monokai", line_numbers=True),
+                )
+                self.app.query_one("#transcript", Transcript).mount(block)
+                return
+        except Exception as exc:
+            text.append(f"(cannot render: {exc})", style=ui.ERR)
+        transcript = self.app.query_one("#transcript", Transcript)
+        transcript.mount(FilePreviewBlock(path, text))
+
     def _tick(self) -> None:
         s = self._stats.pump() or self._stats.fallback()
         used, total, cpu = s.get("ram_used_gb", 0.0), s.get("ram_total_gb", 0.0), s.get("cpu_pct", 0.0)

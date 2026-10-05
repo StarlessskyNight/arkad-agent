@@ -184,110 +184,12 @@ global_commands: bool = True
 # ── visual theme ────────────────────────────────────────────────────────────
 # These are kept in sync with arkad/tui/theme.py PALETTES.
 THEMES = {
-    "red": {
-        "user_border": "#3fb950",
-        "asst_border": "#f97583",
-        "think_border": "#8b949e",
-        "tool_border": "#d29922",
-        "project_border": "#ff7b72",
-    },
-    "blue": {
-        "user_border": "#3fb950",
-        "asst_border": "#56d4dd",
-        "think_border": "#8b949e",
-        "tool_border": "#d29922",
-        "project_border": "#58a6ff",
-    },
-    "purple": {
-        "user_border": "#3fb950",
-        "asst_border": "#bc8cff",
-        "think_border": "#8b949e",
-        "tool_border": "#d29922",
-        "project_border": "#58a6ff",
-    },
-    "green": {
-        "user_border": "#3fb950",
-        "asst_border": "#56d4dd",
-        "think_border": "#8b949e",
-        "tool_border": "#d29922",
-        "project_border": "#56d364",
-    },
-    "orange": {
-        "user_border": "#3fb950",
-        "asst_border": "#f0883e",
-        "think_border": "#8b949e",
-        "tool_border": "#d29922",
-        "project_border": "#ffa657",
-    },
-    "yellow": {
-        "user_border": "#3fb950",
-        "asst_border": "#e3b341",
-        "think_border": "#8b949e",
-        "tool_border": "#d29922",
-        "project_border": "#f0d272",
-    },
     "rose": {
         "user_border": "#3fb950",
         "asst_border": "#f7527a",
         "think_border": "#8b949e",
         "tool_border": "#d29922",
         "project_border": "#ffb3c6",
-    },
-    "slate": {
-        "user_border": "#3fb950",
-        "asst_border": "#8b949e",
-        "think_border": "#6b7684",
-        "tool_border": "#d29922",
-        "project_border": "#b1bac4",
-    },
-    "ocean": {
-        "user_border": "#22c55e",
-        "asst_border": "#60a5fa",
-        "think_border": "#64748b",
-        "tool_border": "#eab308",
-        "project_border": "#3b82f6",
-    },
-    "cyberpunk": {
-        "user_border": "#22d65e",
-        "asst_border": "#d946ef",
-        "think_border": "#7c6a9e",
-        "tool_border": "#facc15",
-        "project_border": "#22d3ee",
-    },
-    "monochrome": {
-        "user_border": "#bbbbbb",
-        "asst_border": "#e0e0e0",
-        "think_border": "#606060",
-        "tool_border": "#999999",
-        "project_border": "#ffffff",
-    },
-    "forest": {
-        "user_border": "#4caf50",
-        "asst_border": "#5a8f4a",
-        "think_border": "#5c6b50",
-        "tool_border": "#cd9b1d",
-        "project_border": "#7cb342",
-    },
-    "dracula": {
-        "user_border": "#50fa7b",
-        "asst_border": "#bd93f9",
-        "think_border": "#6c6f85",
-        "tool_border": "#f1fa8c",
-        "project_border": "#ff79c6",
-    },
-    "sunset": {
-        "user_border": "#56d364",
-        "asst_border": "#e07a3a",
-        "think_border": "#8a604a",
-        "tool_border": "#e3b341",
-        "project_border": "#f59e4c",
-    },
-    "dark": {
-        "user_border": "#4ec9b0",
-        "asst_border": "#569cd6",
-        "think_border": "#606060",
-        "tool_border": "#ce9178",
-        "project_border": "#569cd6",
     },
 }
 
@@ -310,7 +212,7 @@ def _derive_theme_colors() -> None:
 
 _derive_theme_colors()
 
-_DEFAULT_THEME = "opencode" if "opencode" in THEMES else "red"
+_DEFAULT_THEME = "rose"
 theme: str = _DEFAULT_THEME
 theme_colors: dict = THEMES[_DEFAULT_THEME]
 
