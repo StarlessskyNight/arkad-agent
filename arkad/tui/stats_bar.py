@@ -13,7 +13,7 @@ from .cyber_frame import _SysStats
 class StatsBar(Static):
     DEFAULT_CSS = """
     StatsBar {
-        height: 1;
+        height: 2;
         width: 100%;
         dock: top;
         border-bottom: solid $jv-border;
