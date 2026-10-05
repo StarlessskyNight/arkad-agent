@@ -140,7 +140,6 @@ class CyberFrame(Widget):
         self._t0 = time.monotonic()
 
     def compose(self) -> ComposeResult:
-        yield Static("", id="cyber_header")
         with Horizontal(id="cyber_mid"):
             yield Tree("ROOT_DIR", id="cyber_tree")
             yield Static("", id="cyber_info")
@@ -244,19 +243,7 @@ class CyberFrame(Widget):
         transcript.mount(FilePreviewBlock(path, text))
 
     def _tick(self) -> None:
-        s = self._stats.pump() or self._stats.fallback()
-        used, total, cpu = s.get("ram_used_gb", 0.0), s.get("ram_total_gb", 0.0), s.get("cpu_pct", 0.0)
-        up = int(s.get("uptime_secs", time.monotonic() - self._t0))
-        ram_fill = max(0, min(8, int(used / total * 8))) if total else 0
-        cpu_fill = max(0, min(4, int(cpu / 25)))
-        header = Text()
-        header.append("▒" * ram_fill + "░" * (8 - ram_fill), style=ui.ACCENT)
-        header.append(f" RAM {used:.0f}G/{total:.0f}G   ", style=ui.FG_MUTE)
-        header.append("▇" * cpu_fill + "░" * (4 - cpu_fill), style=ui.ACCENT_2)
-        header.append(f" CPU {cpu:.0f}%   ", style=ui.FG_MUTE)
-        header.append(f"UPTIME {up // 3600}:{(up % 3600) // 60:02d}:{up % 60:02d}", style=ui.ACCENT_3)
-        self.query_one("#cyber_header", Static).update(header)
-
+        self._stats.pump()
         info = Text()
         info.append(f"v{self.info.get('version', '')}\n", style=ui.FG_DIM)
         info.append(f"{self.info.get('cwd', '')}\n\n", style=f"bold {ui.FG}")

@@ -156,6 +156,7 @@ from .transcript import (  # noqa: E402
     WelcomeBlock,
 )
 
+from .stats_bar import StatsBar
 _SIDEBAR_MIN_WIDTH = 150
 _PLACEHOLDER = "Ask anything…"
 _BUSY_PLACEHOLDER = "Type a follow-up — it queues (⚡ send now hands it over mid-turn) · esc interrupts"
@@ -311,6 +312,7 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
         yield WebRemoteQR(id="web_qr_overlay")
         with Horizontal(id="main"):
             with Vertical(id="body"):
+                yield StatsBar(id="stats_bar")
                 yield Transcript(id="transcript")
                 yield StickyPrompt(id="sticky_prompt")
                 yield from self._compose_dock()
