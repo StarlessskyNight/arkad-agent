@@ -496,6 +496,10 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
         # Always called on an empty (or just-cleared) transcript.
         from .cyber_frame import CyberFrame
 
+        try:  # a previous cyber frame's prompt may still be docked
+            self.query_one("#cyber_prompt").remove()
+        except Exception:
+            pass
         welcome = CyberFrame(self._welcome_info())
         self.query_one("#transcript", Transcript).mount(welcome)
         if state.update_result:

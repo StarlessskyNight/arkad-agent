@@ -114,17 +114,17 @@ class CyberFrame(Widget):
         padding: 1 2;
         color: $jv-fg-mute;
     }
-    CyberFrame Horizontal#cyber_prompt {
+    Horizontal#cyber_prompt {
         height: 3;
         border: round $jv-accent;
         padding: 0 1;
     }
-    CyberFrame Static#cyber_prefix {
+    Static#cyber_prefix {
         width: auto;
         color: $jv-accent;
         padding: 1 0 0 0;
     }
-    CyberFrame Input#cyber_input {
+    Input#cyber_input {
         width: 1fr;
         border: none;
         background: transparent;
@@ -144,14 +144,6 @@ class CyberFrame(Widget):
         with Horizontal(id="cyber_mid"):
             yield Tree("ROOT_DIR", id="cyber_tree")
             yield Static("", id="cyber_info")
-        with Horizontal(id="cyber_prompt"):
-            try:
-                user = getpass.getuser()
-                host = socket.gethostname().split(".")[0]
-            except Exception:
-                user, host = "harness", "cybernode"
-            yield Static(f"{user}@{host}:~$ ", id="cyber_prefix")
-            yield Input(placeholder="type a command, paste something, or ask…", id="cyber_input")
 
     def on_mount(self) -> None:
         tree = self.query_one("#cyber_tree", Tree)
@@ -177,7 +169,26 @@ class CyberFrame(Widget):
             self.app.query_one("#composer", Horizontal).display = False  # type here, not there
         except Exception:
             pass
-        self.call_after_refresh(lambda: self.query_one("#cyber_input", Input).focus())
+        # Dock the prompt at the bottom of the screen so it never scrolls away.
+        self.call_after_refresh(self._dock_prompt)
+
+    def _dock_prompt(self) -> None:
+        try:
+            try:
+                user = getpass.getuser()
+                host = socket.gethostname().split(".")[0]
+            except Exception:
+                user, host = "harness", "cybernode"
+            prompt = Horizontal(id="cyber_prompt")
+            composer = self.app.query_one("#composer")
+            composer.parent.mount(prompt, after=composer)
+            prompt.mount(
+                Static(f"{user}@{host}:~$ ", id="cyber_prefix"),
+                Input(placeholder="type a command, paste something, or ask…", id="cyber_input"),
+            )
+            self.app.query_one("#cyber_input", Input).focus()
+        except Exception:
+            pass
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         node = event.node
