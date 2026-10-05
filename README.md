@@ -119,6 +119,10 @@ assets/                Logos + social preview
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest tests -q
+
+# Rust helpers (optional; installers build these automatically when cargo is present):
+cd rust/arkad-stats && cargo build --release   # live stats bar daemon
+cd rust/arkad-frame && cargo build --release   # standalone cyber-frame TUI
 ```
 
 ## License

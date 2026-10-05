@@ -144,6 +144,15 @@ for name in ("arkad.tui.app", "arkad.main"):
         if (-not (Test-Install)) { throw 'error: Arkad installed but failed to import (see above)' }
     }
 
+    # Build the optional Rust helpers when cargo is available; skip quietly when it is not.
+    if (Get-Command cargo -ErrorAction SilentlyContinue) {
+        Write-Host 'building rust helpers (arkad-stats, arkad-frame)...'
+        try { Push-Location (Join-Path $InstallDir 'rust\arkad-stats'); cargo build --release; Pop-Location } catch { Write-Host 'warning: arkad-stats build failed (stats bar falls back to Python /proc reads)' }
+        try { Push-Location (Join-Path $InstallDir 'rust\arkad-frame'); cargo build --release; Pop-Location } catch { Write-Host 'warning: arkad-frame build failed (standalone Rust cyber-frame unavailable)' }
+    } else {
+        Write-Host 'cargo not found — skipping rust helpers; stats bar will use the built-in Python reader'
+    }
+
     # A .cmd shim instead of a symlink: symlinks need admin or Developer Mode.
     New-Item -ItemType Directory -Force -Path $BinDir -ErrorAction Stop | Out-Null
     $Shim = Join-Path $BinDir 'arkad.cmd'

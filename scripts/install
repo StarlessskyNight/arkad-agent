@@ -196,6 +196,15 @@ if ! verify_install; then
   verify_install
 fi
 
+# Build the optional Rust helpers when cargo is available; skip quietly when it is not.
+if command -v cargo >/dev/null 2>&1; then
+  echo "building rust helpers (arkad-stats, arkad-frame)..."
+  (cd rust/arkad-stats && cargo build --release) || echo "warning: arkad-stats build failed (stats bar falls back to Python /proc reads)"
+  (cd rust/arkad-frame && cargo build --release) || echo "warning: arkad-frame build failed (standalone Rust cyber-frame unavailable)"
+else
+  echo "cargo not found — skipping rust helpers; stats bar will use the built-in Python reader"
+fi
+
 mkdir -p "${BIN_DIR}"
 
 if [ -e "${LINK}" ] && [ ! -L "${LINK}" ]; then
