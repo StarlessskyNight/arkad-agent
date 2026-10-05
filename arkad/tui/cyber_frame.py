@@ -165,30 +165,20 @@ class CyberFrame(Widget):
                 root.add_leaf(n, data=("file", n))
         self._tick()
         self.set_interval(1.0, self._tick)
+        self.call_after_refresh(self._grab_focus)
+
+    def _grab_focus(self) -> None:
         try:
-            self.app.query_one("#composer", Horizontal).display = False  # type here, not there
+            self.app.query_one("#prompt").focus()
         except Exception:
             pass
-        # Dock the prompt at the bottom of the screen so it never scrolls away.
-        self.call_after_refresh(self._dock_prompt)
+        try:  # clean up any previously docked cyber prompt
+            self.app.query_one("#cyber_prompt").remove()
+        except Exception:
+            pass
 
     def _dock_prompt(self) -> None:
-        try:
-            try:
-                user = getpass.getuser()
-                host = socket.gethostname().split(".")[0]
-            except Exception:
-                user, host = "harness", "cybernode"
-            prompt = Horizontal(id="cyber_prompt")
-            composer = self.app.query_one("#composer")
-            composer.parent.mount(prompt, after=composer)
-            prompt.mount(
-                Static(f"{user}@{host}:~$ ", id="cyber_prefix"),
-                Input(placeholder="type a command, paste something, or ask…", id="cyber_input"),
-            )
-            self.app.query_one("#cyber_input", Input).focus()
-        except Exception:
-            pass
+        pass  # removed: the real composer (#prompt) is used instead
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
         node = event.node
