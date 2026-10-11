@@ -46,9 +46,14 @@
   font-size: 11px;
   letter-spacing: 0.03em;
 }
-.brand-text .brand-by b {
+.brand-text .brand-by a {
   color: var(--accent);
   font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.brand-text .brand-by a:hover {
+  text-decoration: underline;
 }
 .brand-text span {
   font-size: 12.5px;

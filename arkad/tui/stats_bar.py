@@ -5,6 +5,7 @@ import time
 
 from rich.cells import cell_len
 from rich.text import Text
+from textual.events import Click, MouseMove
 from textual.widgets import Static
 
 from ..constants import VERSION
@@ -15,6 +16,7 @@ _LOGO = (  # 2-row block wordmark — same art as the welcome banner
     "█▀█ █▀▄ █▀▄ █▀█ █▄▀",
 )
 _CREDIT = "StarlessskyNight"
+_CREDIT_URL = "https://github.com/StarlessskyNight"
 
 
 class _SysStats:
@@ -75,6 +77,9 @@ class StatsBar(Static):
     def on_mount(self) -> None:
         self._stats = _SysStats()
         self._t0 = time.monotonic()
+        # Credit-name hit box in content coords: (x0, x1, row), set by _tick.
+        self._name_rect: tuple[int, int, int] | None = None
+        self._name_hover = False
         self.set_interval(1.0, self._tick)
         self._tick()
 
@@ -113,13 +118,13 @@ class StatsBar(Static):
         ram.append(" RAM ", style=ui.FG_DIM)
         ram.append(f"{used:.0f}G/{total:.0f}G", style=ui.ACCENT_2)
         cpu_p = Text()
-        cpu_p.append("   |   ", style=ui.FG_DIM)
+        cpu_p.append("  ·  ", style=ui.FG_DIM)
         cpu_p.append("▇" * cpu_fill + "░" * (4 - cpu_fill), style=ui.ACCENT_2)
         cpu_p.append(" CPU ", style=ui.FG_DIM)
         cpu_p.append(f"{cpu:.0f}%", style=ui.ACCENT_2)
         up_p = Text()
-        up_p.append("   |   ", style=ui.FG_DIM)
-        up_p.append("UPTIME ", style=ui.FG_DIM)
+        up_p.append("  ·  ", style=ui.FG_DIM)
+        up_p.append("UP ", style=ui.FG_DIM)
         up_p.append(f"{up // 3600}:{(up % 3600) // 60:02d}:{up % 60:02d}", style=ui.ACCENT_2)
 
         content_w = max(24, (self.size.width or 80) - 2)  # minus StatsBar padding
@@ -133,19 +138,77 @@ class StatsBar(Static):
             if row == 0 and cell_len(right.plain):
                 out.append(" " * max(1, content_w - len(_LOGO[0]) - cell_len(right.plain)))
                 out.append_text(right)
+
+        # Signature row: ⟡ created by <name> ─ fading rule ─ vX.Y.Z
         out.append("\n  ")
-        out.append("✦ ", style=ui.ACCENT)
-        out.append("created by ", style=ui.FG_DIM)
-        head_w = 15  # the two-space indent + "✦ created by "
+        out.append("⟡ ", style=f"bold {ui.ACCENT}")
+        out.append("created by ", style=f"italic {ui.FG_DIM}")
+        head_w = 15  # the two-space indent + "⟡ created by "
         name = _CREDIT
         if head_w + len(name) > content_w:  # narrow: clip, never wrap (bar is 3 rows)
             room = content_w - head_w
             name = name[: max(1, room - 1)] + "…" if room > 1 else ""
+        name_style = f"bold italic {ui.ACCENT_3 if self._name_hover else ui.ACCENT}"
+        if self._name_hover:
+            name_style += " underline"
         if name:
-            out.append(name, style=f"bold {ui.ACCENT}")
+            out.append(name, style=name_style)
+            self._name_rect = (head_w, head_w + cell_len(name), 2)
+        else:
+            self._name_rect = None
         ver = f"v{VERSION}"
-        pad = content_w - head_w - len(name) - len(ver)
-        if pad >= 1:
-            out.append(" " * pad)
+        rule_from = ui.blend(ui.ACCENT, ui.BORDER, 0.55)
+        room = content_w - (head_w + len(name)) - 1 - len(ver)
+        if room >= 4:  # a fading ─── rule, then the version
+            out.append(" ")
+            for i in range(room - 1):
+                k = i / max(1, room - 2)
+                out.append("─", style=ui.blend(rule_from, ui.BG_0, k))
+            out.append(" ")
+        elif room >= 1:
+            out.append(" " * room)
+        if room >= 0:
             out.append(ver, style=ui.FG_DIM)
         self.update(out)
+
+    # ── credit link: click StarlessskyNight → open GitHub ────────────────
+
+    def _over_name(self, x: int, y: int) -> bool:
+        """Is widget-relative (x, y) inside the credit-name hit box?
+
+        Event coords are region-relative; the hit box is content-relative,
+        so shift by the content origin (StatsBar has padding + a bottom
+        border — both count).
+        """
+        rect = self._name_rect
+        if not rect:
+            return False
+        region, content = self.region, self.content_region
+        cx = x - (content.x - region.x)
+        cy = y - (content.y - region.y)
+        x0, x1, row = rect
+        return cy == row and x0 <= cx < x1
+
+    def on_mouse_move(self, event: MouseMove) -> None:
+        over = self._over_name(event.x, event.y)
+        if over != self._name_hover:
+            self._name_hover = over
+            self._tick()
+
+    def on_leave(self, event: object) -> None:
+        if self._name_hover:  # cursor left the bar with the link lit
+            self._name_hover = False
+            self._tick()
+
+    def on_click(self, event: Click) -> None:
+        if self._over_name(event.x, event.y):
+            event.stop()
+            self._open_credit()
+
+    def _open_credit(self) -> None:
+        try:
+            self.app.open_url(_CREDIT_URL)
+        except Exception:
+            import webbrowser
+
+            webbrowser.open(_CREDIT_URL)
