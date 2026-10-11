@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import time
 
+from rich.cells import cell_len
 from rich.text import Text
 from textual.widgets import Static
 
+from ..constants import VERSION
 from . import theme as ui
+
+_LOGO = (  # 2-row block wordmark — same art as the welcome banner
+    "▄▀█ █▀█ █ █ ▄▀█ █▀▄",
+    "█▀█ █▀▄ █▀▄ █▀█ █▄▀",
+)
+_CREDIT = "StarlessskyNight"
 
 
 class _SysStats:
@@ -53,7 +61,7 @@ class _SysStats:
 class StatsBar(Static):
     DEFAULT_CSS = """
     StatsBar {
-        height: 2;
+        height: 3;
         width: 100%;
         dock: top;
         border-bottom: solid $jv-border;
@@ -69,6 +77,29 @@ class StatsBar(Static):
         self.set_interval(1.0, self._tick)
         self._tick()
 
+    @staticmethod
+    def _fit(parts: list[Text], need: int, width: int) -> Text:
+        """Longest prefix of *parts* whose joined width fits in *width*.
+
+        On a terminal too narrow for even the first fragment the stats are
+        dropped entirely — the logo always renders (never wraps).
+        """
+        for i in range(len(parts), 0, -1):
+            cand = Text()
+            for p in parts[:i]:
+                cand.append_text(p)
+            if need + cell_len(cand.plain) <= width:
+                return cand
+        return Text()
+
+    @staticmethod
+    def _art(out: Text, line: str) -> None:
+        """Append one wordmark row with the accent gradient used by the welcome."""
+        hi = ui.blend(ui.ACCENT, ui.ACCENT_3, 0.35)
+        n = max(1, len(line) - 1)
+        for col, ch in enumerate(line):
+            out.append(ch, style=f"bold {ui.blend(ui.ACCENT, hi, col / n)}")
+
     def _tick(self) -> None:
         s = self._stats.pump() or self._stats.fallback()
         used, total, cpu = (s.get(k, 0.0) for k in ("ram_used_gb", "ram_total_gb", "cpu_pct"))
@@ -76,21 +107,44 @@ class StatsBar(Static):
         ram_fill = max(0, min(8, int(used / total * 8))) if total else 0
         cpu_fill = max(0, min(4, int(cpu / 25)))
 
-        right = Text()
-        right.append("▒" * ram_fill + "░" * (8 - ram_fill), style=ui.ACCENT_2)
-        right.append(" RAM ", style=ui.FG_DIM)
-        right.append(f"{used:.0f}G/{total:.0f}G", style=ui.ACCENT_2)
-        right.append("   |   ", style=ui.FG_DIM)
-        right.append("▇" * cpu_fill + "░" * (4 - cpu_fill), style=ui.ACCENT_2)
-        right.append(" CPU ", style=ui.FG_DIM)
-        right.append(f"{cpu:.0f}%", style=ui.ACCENT_2)
-        right.append("   |   ", style=ui.FG_DIM)
-        right.append("UPTIME ", style=ui.FG_DIM)
-        right.append(f"{up // 3600}:{(up % 3600) // 60:02d}:{up % 60:02d}", style=ui.ACCENT_2)
+        ram = Text()
+        ram.append("▒" * ram_fill + "░" * (8 - ram_fill), style=ui.ACCENT_2)
+        ram.append(" RAM ", style=ui.FG_DIM)
+        ram.append(f"{used:.0f}G/{total:.0f}G", style=ui.ACCENT_2)
+        cpu_p = Text()
+        cpu_p.append("   |   ", style=ui.FG_DIM)
+        cpu_p.append("▇" * cpu_fill + "░" * (4 - cpu_fill), style=ui.ACCENT_2)
+        cpu_p.append(" CPU ", style=ui.FG_DIM)
+        cpu_p.append(f"{cpu:.0f}%", style=ui.ACCENT_2)
+        up_p = Text()
+        up_p.append("   |   ", style=ui.FG_DIM)
+        up_p.append("UPTIME ", style=ui.FG_DIM)
+        up_p.append(f"{up // 3600}:{(up % 3600) // 60:02d}:{up % 60:02d}", style=ui.ACCENT_2)
 
-        line = Text()
-        line.append(" arkad", style=f"bold {ui.ACCENT}")
-        pad = max(2, (self.size.width or 80) - 8 - len(str(right)))
-        line.append(" " * pad)
-        line.append_text(right)
-        self.update(line)
+        content_w = max(24, (self.size.width or 80) - 2)  # minus StatsBar padding
+        right = self._fit([ram, cpu_p, up_p], len(_LOGO[0]) + 4, content_w)
+
+        out = Text()
+        for row, art in enumerate(_LOGO):
+            if row:
+                out.append("\n")
+            self._art(out, art)
+            if row == 0 and cell_len(right.plain):
+                out.append(" " * max(1, content_w - len(_LOGO[0]) - cell_len(right.plain)))
+                out.append_text(right)
+        out.append("\n  ")
+        out.append("✦ ", style=ui.ACCENT)
+        out.append("created by ", style=ui.FG_DIM)
+        head_w = 15  # the two-space indent + "✦ created by "
+        name = _CREDIT
+        if head_w + len(name) > content_w:  # narrow: clip, never wrap (bar is 3 rows)
+            room = content_w - head_w
+            name = name[: max(1, room - 1)] + "…" if room > 1 else ""
+        if name:
+            out.append(name, style=f"bold {ui.ACCENT}")
+        ver = f"v{VERSION}"
+        pad = content_w - head_w - len(name) - len(ver)
+        if pad >= 1:
+            out.append(" " * pad)
+            out.append(ver, style=ui.FG_DIM)
+        self.update(out)

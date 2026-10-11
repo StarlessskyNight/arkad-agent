@@ -157,7 +157,6 @@ from .transcript import (  # noqa: E402
 )
 
 from .stats_bar import StatsBar
-from .workspace import Workspace
 _SIDEBAR_MIN_WIDTH = 150
 _PLACEHOLDER = "Ask anything…"
 _BUSY_PLACEHOLDER = "Type a follow-up — it queues (⚡ send now hands it over mid-turn) · esc interrupts"
@@ -314,7 +313,6 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
         with Horizontal(id="main"):
             with Vertical(id="body"):
                 yield StatsBar(id="stats_bar")
-                yield Workspace(self._welcome_info(), id="workspace")
                 yield Transcript(id="transcript")
                 yield StickyPrompt(id="sticky_prompt")
                 yield from self._compose_dock()

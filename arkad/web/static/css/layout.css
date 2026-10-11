@@ -37,7 +37,18 @@
   font-family: var(--font-display);
   font-size: 18px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  text-shadow: 0 0 18px rgba(var(--accent-rgb), 0.35);
+}
+.brand-text .brand-by {
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+.brand-text .brand-by b {
+  color: var(--accent);
+  font-weight: 600;
 }
 .brand-text span {
   font-size: 12.5px;
