@@ -191,7 +191,7 @@ class QueueRow(_ClickRow):
             out.append(note, style=f"italic {ui.ACCENT_2}")
             return out
         if item.steer:
-            out.append("⚡ ", style=f"bold {ui.ACCENT}")
+            out.append("⚡ ", style=f"bold {ui.ACCENT_2}")
             note = "  next step" if not self._narrow() else ""
             room = max(4, width - 2 - len(note))
             body = Text(text, style=ui.FG)

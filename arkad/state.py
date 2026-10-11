@@ -212,7 +212,7 @@ def _derive_theme_colors() -> None:
 
 _derive_theme_colors()
 
-_DEFAULT_THEME = "rose"
+_DEFAULT_THEME = "nightwing"
 theme: str = _DEFAULT_THEME
 theme_colors: dict = THEMES[_DEFAULT_THEME]
 

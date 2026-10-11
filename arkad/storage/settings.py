@@ -10,7 +10,7 @@ run ``/settings reload`` (or restart) to pick up changes::
 
     {
       "model": "sonnet-4-6",
-      "theme": "red",
+      "theme": "nightwing",
       "skills": { "global": false },
       "mcp":    { "global": false },
       "think":  { "mode": true, "effort": "high" },
@@ -55,7 +55,7 @@ SETTINGS_FILE = CONFIG_DIR / "settings.json"
 DEFAULTS: dict[str, Any] = {
     "model":    "",          # empty string == fall back to constants.MODEL
     "provider": "",          # empty string == resolve from provider file / auth
-    "theme":  "red",
+    "theme":  "nightwing",
     "agent":  {"active": "", "global": True},   # global agents visible by default
     "skills": {"global": False},
     "mcp":    {"global": False},

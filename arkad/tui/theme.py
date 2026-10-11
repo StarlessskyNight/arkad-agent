@@ -23,6 +23,28 @@ from __future__ import annotations
 Palette = dict[str, str]
 
 PALETTES: dict[str, Palette] = {
+    # Custom "Nightwing" palette — midnight black base, navy panels,
+    # electric-blue branding, neon-cyan active highlights, steel chrome.
+    "nightwing": {
+        "bg_0": "#05070a",      # Midnight Black — app background
+        "bg_1": "#0c162e",      # Stalker Navy — panels (stats bar, sidebar, popups)
+        "bg_2": "#0c162e",      # composer + inputs share the panel color
+        "bg_3": "#1a243c",      # derived: bg_1 + 8% fg — focus/hover surfaces
+        "bg_4": "#242f46",      # derived: bg_1 + 14% fg — stronger hover/controls
+        "border": "#4a5d78",    # Escrima Steel — borders + muted text
+        "border_fc": "#00d2ff", # focus-chrome border (Neon Glow)
+        "cursor": "#00d2ff",    # Neon Glow — block cursor + active highlights
+        "fg": "#b9cadb",        # Acrobat Silver — standard text
+        "fg_mute": "#4a5d78",
+        "fg_dim": "#4a5d78",
+        "sep": "#283241",       # derived: bg_0 + 50% border
+        "ok": "#56d364",
+        "warn": "#e3b341",
+        "err": "#f85149",
+        "accent": "#0088ff",    # Electric Blue — logo, prompt>, branch
+        "accent_2": "#00d2ff",  # RAM/CPU meters, ⚡ bolts, cursor block
+        "accent_3": "#00d2ff",
+    },
     "rose": {
         "bg_0": "#0b0f15",
         "bg_1": "#11161d",
@@ -51,10 +73,11 @@ PALETTES: dict[str, Palette] = {
 
 # One-line descriptions for the /theme picker (order = picker order).
 THEME_DESCRIPTIONS: dict[str, str] = {
+    "nightwing": "midnight black + navy panels, electric-blue accents",
     "rose": "hot pink accents, magenta borders",
 }
 
-DEFAULT_THEME = "rose"
+DEFAULT_THEME = "nightwing"
 
 
 # ── Tokens (module-level constants — reassigned by set_theme()) ──────────
@@ -76,6 +99,9 @@ ERR = "#f85149"
 ACCENT = "#79c0ff"
 ACCENT_2 = "#c084fc"
 ACCENT_3 = "#f0b3ff"
+# Block-cursor / active-highlight color. Palettes may override it with a
+# "cursor" key; otherwise the cursor follows the accent (as before).
+CURSOR = ACCENT
 
 
 # ── Visible glyphs — keep ASCII-fallback-safe where used in tight strips ──
@@ -123,20 +149,21 @@ def textual_theme(name: str | None = None):
 
     key = name or _ACTIVE_THEME
     p = PALETTES.get(key) or PALETTES[DEFAULT_THEME]
+    cursor = p.get("cursor", p["accent"])
     variables = {f"jv-{k.replace('_', '-')}": v for k, v in p.items()}
     variables.update({
         "jv-user-bg": blend(p["bg_0"], p["bg_3"], 0.8),
         "jv-code-bg": blend(p["bg_0"], p["bg_2"], 0.9),
         "jv-select": blend(p["bg_0"], p["accent"], 0.28),
         "jv-modal-select": blend(p["bg_1"], p["accent"], 0.22),
-        "block-cursor-background": p["accent"],
+        "block-cursor-background": cursor,
         "block-cursor-foreground": p["bg_0"],
         "block-cursor-text-style": "bold",
-        "block-cursor-blurred-background": blend(p["bg_0"], p["accent"], 0.3),
+        "block-cursor-blurred-background": blend(p["bg_0"], cursor, 0.3),
         "block-cursor-blurred-foreground": p["fg"],
         "block-hover-background": blend(p["bg_0"], p["bg_4"], 0.6),
         "input-selection-background": blend(p["bg_0"], p["accent"], 0.35),
-        "input-cursor-background": p["accent"],
+        "input-cursor-background": cursor,
         "input-cursor-foreground": p["bg_0"],
         "footer-background": p["bg_0"],
         "scrollbar": p["bg_3"],
@@ -370,7 +397,7 @@ TextArea > .text-area--cursor-line {{
     background: transparent;
 }}
 TextArea > .text-area--cursor {{
-    background: {ACCENT};
+    background: {CURSOR};
     color: {BG_0};
 }}
 *:focus TextArea > .text-area--selection,
@@ -571,7 +598,7 @@ def set_theme(name: str) -> None:
     global BORDER, BORDER_FC
     global FG, FG_MUTE, FG_DIM, SEP
     global OK, WARN, ERR
-    global ACCENT, ACCENT_2, ACCENT_3
+    global ACCENT, ACCENT_2, ACCENT_3, CURSOR
     global GLOBAL_CSS, MODAL_CSS
 
     p = PALETTES.get(name)
@@ -598,6 +625,7 @@ def set_theme(name: str) -> None:
     ACCENT = p["accent"]
     ACCENT_2 = p["accent_2"]
     ACCENT_3 = p["accent_3"]
+    CURSOR = p.get("cursor", p["accent"])
 
     GLOBAL_CSS = _build_global_css()
     MODAL_CSS = _build_modal_css()

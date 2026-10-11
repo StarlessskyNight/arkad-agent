@@ -178,7 +178,9 @@ class WelcomeBlock(Block):
                     out.append(" ")
                     continue
                 t = col / max(1, width - 1)
-                color = ui.blend(ui.ACCENT, ui.ACCENT_3, t)
+                # Primary-accent wordmark with a subtle lighter shimmer
+                # (keeps the accent dominant on every palette).
+                color = ui.blend(ui.ACCENT, ui.blend(ui.ACCENT, ui.ACCENT_3, 0.35), t)
                 if band is not None:
                     k = max(0.0, 1.0 - abs(col + row * 2 - band) / 3.5)
                     color = ui.blend(color, "#ffffff", 0.75 * k)
@@ -190,7 +192,7 @@ class WelcomeBlock(Block):
                 out.append(_short_path(str(i.get("cwd", ""))), style=f"bold {ui.FG}")
                 if i.get("branch"):
                     out.append("  ⎇ ", style=ui.FG_DIM)
-                    out.append(_clip(str(i["branch"]), 32), style=ui.ACCENT_2)
+                    out.append(_clip(str(i["branch"]), 32), style=ui.ACCENT)
         ctx = [c for c in (i.get("context") or []) if c]
         if ctx:
             out.append("\n\n  ")
@@ -217,9 +219,6 @@ class WelcomeBlock(Block):
                 out.append("   ")
             out.append(key, style=f"bold {ui.FG_MUTE}")
             out.append(f" {label}", style=ui.FG_DIM)
-        out.append("\n\n  ", style=ui.FG_DIM)
-        out.append("prompt> ", style=f"bold {ui.ACCENT}")
-        out.append("█", style=f"bold {ui.ACCENT_2}")
         return out
 
 
@@ -755,11 +754,13 @@ class ToolBlock(LineBlock):
             return Text(icon, style=f"bold {ui.ERR}")
         if self.status == "cancelled":
             return Text(icon, style=ui.FG_DIM)
-        color = ui.OK
+        # ⚡ (run_bash) is an active highlight; other done tools stay green.
+        base = ui.ACCENT_2 if icon == "⚡" else ui.OK
+        color = base
         if self.t1 is not None:
             k = (time.monotonic() - self.t1) / _FLASH_SECS
             if k < 1:
-                color = ui.blend(ui.blend(ui.OK, "#ffffff", 0.7), ui.OK, k)
+                color = ui.blend(ui.blend(base, "#ffffff", 0.7), base, k)
         return Text(icon, style=f"bold {color}")
 
     def as_text(self) -> Text:
