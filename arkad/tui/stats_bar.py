@@ -7,7 +7,47 @@ from rich.text import Text
 from textual.widgets import Static
 
 from . import theme as ui
-from .cyber_frame import _SysStats
+
+
+class _SysStats:
+    """Pure-Python /proc reader for live RAM/CPU/uptime."""
+
+    def __init__(self) -> None:
+        self._last_cpu = None
+
+    def pump(self):
+        try:
+            mem = {}
+            for line in open("/proc/meminfo"):
+                k, _, rest = line.partition(":")
+                mem[k] = int(rest.strip().split()[0])
+            total = mem["MemTotal"] / 1024 / 1024
+            avail = mem.get("MemAvailable", mem.get("MemFree", 0)) / 1024 / 1024
+            used = total - avail
+        except Exception:
+            used, total = 0.0, 0.0
+        try:
+            uptime = float(open("/proc/uptime").read().split()[0])
+        except Exception:
+            uptime = 0.0
+        try:
+            nums = [int(x) for x in open("/proc/stat").readline().split()[1:]]
+            idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+            total_j = sum(nums)
+            if self._last_cpu is None:
+                self._last_cpu = (total_j, idle)
+                cpu = 0.0
+            else:
+                dt = total_j - self._last_cpu[0]
+                di = idle - self._last_cpu[1]
+                self._last_cpu = (total_j, idle)
+                cpu = 0.0 if dt <= 0 else max(0.0, min(100.0, (1 - di / dt) * 100))
+        except Exception:
+            cpu = 0.0
+        return {"ram_used_gb": used, "ram_total_gb": total, "cpu_pct": cpu, "uptime_secs": uptime, "net_ok": True}
+
+    def fallback(self):
+        return self.pump() or {"ram_used_gb": 0.0, "ram_total_gb": 0.0, "cpu_pct": 0.0, "uptime_secs": 0.0, "net_ok": True}
 
 
 class StatsBar(Static):
@@ -17,6 +57,7 @@ class StatsBar(Static):
         width: 100%;
         dock: top;
         border-bottom: solid $jv-border;
+        background: $jv-bg-1;
         padding: 0 1;
         color: $jv-fg-mute;
     }

@@ -76,6 +76,11 @@ def test_theme_switch_recolors_open_dialog_and_keeps_its_size(hermetic_app, mode
     from arkad.tui import theme as ui
 
     before = ui.active_theme()
+    # The shipped picker is single-theme (rose); inject a throwaway second
+    # palette so the theme-switch assertions still exercise a real switch.
+    if len(ui.theme_names()) < 2:
+        monkeypatch.setitem(ui.THEME_DESCRIPTIONS, "_testtheme", "test")
+        monkeypatch.setitem(ui.PALETTES, "_testtheme", dict(ui.PALETTES["rose"], bg_1="#123456"))
     target = next(n for n in ui.theme_names() if n != before)
     monkeypatch.setattr(state, "theme", state.theme)
     monkeypatch.setattr(state, "theme_colors", dict(getattr(state, "theme_colors", {}) or {}))

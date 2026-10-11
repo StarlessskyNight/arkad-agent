@@ -18,9 +18,8 @@ from ..console import console, Panel
 from .. import state
 
 # Measured display widths for ``WELCOME_ART`` variants (Unicode block chars).
-_WELCOME_ART_FULL_WIDTH = 82    # side-by-side art is ~80 cols; need 1 col margin
-_WELCOME_ART_STACKED_WIDTH = 40  # stacked ARKAD column is ~39 cols
-_WELCOME_ART_COMPACT_MIN_WIDTH = 44
+_WELCOME_ART_FULL_WIDTH = 44     # side-by-side art is 43 cols; need 1 col margin
+_WELCOME_ART_STACKED_WIDTH = 24  # stacked AGENT column is 23 cols
 
 
 def _provider_text(provider: str) -> str:
@@ -87,16 +86,8 @@ def _theme_colors():
 
 
 WELCOME_ART = r"""
-            _____  _  __          _____                 _____ ______ _   _ _______
-      /\   |  __ \| |/ /    /\   |  __ \          /\   / ____|  ____| \ | |__   __|
-     /  \  | |__) | ' /    /  \  | |  | |        /  \ | |  __| |__  |  \| |  | |
-    / /\ \ |  _  /|  <    / /\ \ | |  | |       / /\ \| | |_ |  __| | . ` |  | |
-   / ____ \| | \ \| . \  / ____ \| |__| |      / ____ \ |__| | |____| |\  |  | |
-  /_/    \_\_|  \_\_|\_\/_/    \_\_____/      /_/    \_\_____|______|_| \_|  |_|
-"""
-
-WELCOME_ART_COMPACT = """
-  ◆  ARKAD  ·  AGENT  ◆
+▄▀█ █▀█ █ █ ▄▀█ █▀▄    ▄▀█ █▀▀ █▀▀ █▄ █ ▀█▀
+█▀█ █▀▄ █▀▄ █▀█ █▄▀    █▀█ █▄█ ██▄ █ ▀█ █
 """
 
 
@@ -119,10 +110,11 @@ def _split_welcome_art(full: str) -> tuple[list[str], list[str]]:
     arkad_lines: list[str] = []
     agent_lines: list[str] = []
     for line in full.strip().splitlines():
-        # The two words are separated by 3–4 spaces around column 58–62.
-        match = re.search(r" {3,}", line[40:])
+        # The two words are separated by a 4-space gap (letters never
+        # contain more than one consecutive space).
+        match = re.search(r" {3,}", line)
         if match:
-            idx = 40 + match.start()
+            idx = match.start()
             arkad_lines.append(line[:idx].rstrip())
             agent_lines.append(line[idx:].lstrip())
         else:
@@ -143,8 +135,6 @@ def welcome_art_for_width(width: int) -> str | None:
         return WELCOME_ART
     if width >= _WELCOME_ART_STACKED_WIDTH:
         return "\n" + _stacked_welcome_art(WELCOME_ART) + "\n"
-    if width >= _WELCOME_ART_COMPACT_MIN_WIDTH:
-        return WELCOME_ART_COMPACT
     return None
 
 

@@ -157,6 +157,7 @@ from .transcript import (  # noqa: E402
 )
 
 from .stats_bar import StatsBar
+from .workspace import Workspace
 _SIDEBAR_MIN_WIDTH = 150
 _PLACEHOLDER = "Ask anything…"
 _BUSY_PLACEHOLDER = "Type a follow-up — it queues (⚡ send now hands it over mid-turn) · esc interrupts"
@@ -313,6 +314,7 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
         with Horizontal(id="main"):
             with Vertical(id="body"):
                 yield StatsBar(id="stats_bar")
+                yield Workspace(self._welcome_info(), id="workspace")
                 yield Transcript(id="transcript")
                 yield StickyPrompt(id="sticky_prompt")
                 yield from self._compose_dock()
@@ -377,11 +379,6 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
 
         from ..project_context import detect_project_context
         detect_project_context()
-
-        # Auto-activate coding agent when inside a coding project
-        # and the user hasn't explicitly set an agent yet.
-        from ..storage.agents import auto_activate_coding_agent
-        auto_activate_coding_agent()
 
         self._render_footer()
         self._set_status("ready")
@@ -493,14 +490,9 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
 
     def _mount_welcome(self) -> None:
         # Always called on an empty (or just-cleared) transcript.
-        from .cyber_frame import CyberFrame
-
-        try:  # a previous cyber frame's prompt may still be docked
-            self.query_one("#cyber_prompt").remove()
-        except Exception:
-            pass
-        welcome = CyberFrame(self._welcome_info())
+        welcome = WelcomeBlock(self._welcome_info())
         self.query_one("#transcript", Transcript).mount(welcome)
+        self.call_after_refresh(welcome.start_shine)
         if state.update_result:
             info = state.update_result
             count = info.get("count", 0)
@@ -517,6 +509,14 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
         self._finish_welcome_intro()
 
     def _finish_welcome_intro(self) -> None:
+        # Auto-activate the coding agent only after the welcome block is
+        # mounted, so its notice lands below the welcome (not above it).
+        try:
+            from ..storage.agents import auto_activate_coding_agent
+
+            auto_activate_coding_agent()
+        except Exception:
+            pass
         self._auto_connect_mcp_background()
         self._check_for_updates_background()
         self._warm_model_catalogs_background()

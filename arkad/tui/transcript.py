@@ -108,11 +108,9 @@ def shimmer(text: str, base: str, hi: str, *, speed: float = 14.0, width: float 
 
 # ── welcome ───────────────────────────────────────────────────────────────
 
-_LOGO = (
-    "   _   ___ _  __   _   ___  ",
-    "  /_\\ | _ \\ |/ /  /_\\ |   \\ ",
-    " / _ \\|   / ' <  / _ \\| |) |",
-    "/_/ \\_\\_|_\\_|\\_\\/_/ \\_\\___/ ",
+_LOGO = (  # 2-row block wordmark — row 0 carries the version, row 1 the cwd
+    "▄▀█ █▀█ █ █ ▄▀█ █▀▄",
+    "█▀█ █▀▄ █▀▄ █▀█ █▄▀",
 )
 
 
@@ -145,211 +143,61 @@ class WelcomeBlock(Block):
         super().__init__()
         self.info = info
         self._shine_t0: float | None = None
-        self._last_cpu: tuple[int, int] | None = None
-        self._stats: dict[str, float] | None = None
-
-    # ── live stats: direct /proc reads in Python.
-
-    def _pump_rust_stats(self) -> dict[str, float] | None:
-        try:
-            used, total = self._ram_stats()
-            cpu = self._cpu_pct()
-            try:
-                uptime = float(open("/proc/uptime").read().split()[0])
-            except Exception:
-                uptime = 0.0
-            return {
-                "ram_used_gb": used,
-                "ram_total_gb": total,
-                "cpu_pct": cpu,
-                "uptime_secs": uptime,
-                "net_ok": True,
-            }
-        except Exception:
-            return None
-
-    @staticmethod
-    def _ram_stats() -> tuple[float, float]:
-        """(used GB, total GB) from /proc/meminfo; (0, 0) when unavailable."""
-        try:
-            mem: dict[str, int] = {}
-            for line in open("/proc/meminfo"):
-                k, _, rest = line.partition(":")
-                mem[k] = int(rest.strip().split()[0])  # kB
-            total = mem["MemTotal"] / 1024 / 1024
-            avail = mem.get("MemAvailable", mem.get("MemFree", 0)) / 1024 / 1024
-            return total - avail, total
-        except Exception:
-            return 0.0, 0.0
-
-    def _cpu_pct(self) -> float:
-        try:
-            nums = [int(x) for x in open("/proc/stat").readline().split()[1:]]
-            idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
-            total = sum(nums)
-            if self._last_cpu is None:
-                self._last_cpu = (total, idle)
-                return 0.0
-            dt = total - self._last_cpu[0]
-            di = idle - self._last_cpu[1]
-            self._last_cpu = (total, idle)
-            return 0.0 if dt <= 0 else max(0.0, min(100.0, (1 - di / dt) * 100))
-        except Exception:
-            try:
-                import os
-
-                return max(0.0, min(100.0, os.getloadavg()[0] / os.cpu_count() * 100))
-            except Exception:
-                return 0.0
-
-    def _stats_line(self) -> Text:
-        stats = self._pump_rust_stats()
-        if stats is not None:
-            used, total, cpu = stats["ram_used_gb"], stats["ram_total_gb"], stats["cpu_pct"]
-        else:
-            used, total = self._ram_stats()
-            cpu = self._cpu_pct()
-        out = Text()
-        out.append("  ")
-        if total > 0:
-            blocks = max(0, min(8, int(used / total * 8)))
-            out.append("▒" * blocks + "░" * (8 - blocks), style=ui.ACCENT)
-            out.append(f"  RAM {used:.0f}G/{total:.0f}G", style=ui.FG_MUTE)
-            out.append("   ")
-        cfill = max(0, min(4, int(cpu / 25)))
-        out.append("▇" * cfill + "░" * (4 - cfill), style=ui.ACCENT_2)
-        out.append(f"  CPU {cpu:.0f}%", style=ui.FG_MUTE)
-        return out
-
-    def start_shine(self) -> None:
-        """One diagonal light sweep across the wordmark after launch."""
-        self._shine_t0 = time.monotonic()
-        timer = self.set_interval(1 / 30, self._shine_tick)
-        self._shine_timer = timer
-        # Live RAM/CPU tick.
-        self.set_interval(2.0, self.refresh)
-
-    def _shine_tick(self) -> None:
-        self.refresh()
-        if self._shine_t0 is None or time.monotonic() - self._shine_t0 > self.SHINE_SECS:
-            self._shine_t0 = None
-            self._shine_timer.stop()
-            self.refresh()
 
     def plain_text(self) -> str:
-        return str(self.render())
+        return _plain(self.render())
+
+    def start_shine(self) -> None:
+        self._shine_t0 = time.monotonic()
+
+        def stop():
+            self._shine_t0 = None
+            try:
+                self._shine_frame.stop()
+            except Exception:
+                pass
+            self.refresh(layout=True)
+
+        self._shine_frame = self.set_interval(1 / 30, self.refresh)
+        self.set_interval(self.SHINE_SECS, stop, repeat=1)
+        self.refresh(layout=True)
 
     def render(self) -> Text:
         i = self.info
         out = Text()
-
-        # ── live values (Rust daemon first, /proc fallback) ──────────────
-        stats = self._pump_rust_stats()
-        if stats is not None:
-            used, total, cpu = stats["ram_used_gb"], stats["ram_total_gb"], stats["cpu_pct"]
-            uptime = stats.get("uptime_secs", 0.0)
-            net_ok = stats.get("net_ok", True)
-        else:
-            used, total = self._ram_stats()
-            cpu = self._cpu_pct()
-            try:
-                uptime = float(open("/proc/uptime").read().split()[0])
-            except Exception:
-                uptime = 0.0
-            try:
-                from pathlib import Path as _P
-
-                net_ok = any(
-                    (_P(f"/sys/class/net/{n}/operstate").read_text().strip() == "up")
-                    for n in os.listdir("/sys/class/net") if n != "lo"
-                )
-            except Exception:
-                net_ok = True
-        ram_fill = max(0, min(8, int(used / total * 8))) if total else 0
-        cpu_fill = max(0, min(4, int(cpu / 25)))
-        up = int(uptime)
-        uptime_s = f"{up // 3600}:{(up % 3600) // 60:02d}:{up % 60:02d}"
-
-        # ── top status bar ───────────────────────────────────────────────
-        out.append("╔" + "═" * 78 + "╗\n", style=ui.BORDER_FC)
-        status = Text()
-        status.append("⚡ LINK: SECURE " if net_ok else "⚡ LINK: OFFLINE ",
-                      style=f"bold {ui.OK if net_ok else ui.ERR}")
-        status.append("│ ", style=ui.FG_DIM)
-        status.append(("▒" * ram_fill + "░" * (8 - ram_fill)) + f" RAM {used:.0f}G/{total:.0f}G ", style=ui.ACCENT)
-        status.append("│ ", style=ui.FG_DIM)
-        status.append(("▇" * cpu_fill + "░" * (4 - cpu_fill)) + f" CPU {cpu:.0f}% ", style=ui.ACCENT_2)
-        status.append("│ ", style=ui.FG_DIM)
-        status.append(f"UPTIME: {uptime_s} ", style=ui.ACCENT_3)
-        out.append("║ ", style=ui.BORDER_FC)
-        out.append_text(status)
-        out.append(" " * max(0, 78 - len(str(status)) - 1))
-        out.append("║\n", style=ui.BORDER_FC)
-        out.append("╟" + "─" * 78 + "╢\n", style=ui.BORDER_FC)
-
-        # ── left pane: real cwd tree + hex of the latest daemon payload ──
-        try:
-            entries = sorted(os.listdir("."), key=lambda n: (not os.path.isdir(n), n.lower()))
-            entries = [n for n in entries if not n.startswith(".")][:6]
-        except Exception:
-            entries = []
-        tree = ["├─ " + (n + "/" if os.path.isdir(n) else n) for n in entries]
-        if tree:
-            tree[-1] = tree[-1].replace("├─", "└─", 1)
-        left = ["┌─[ ROOT_DIR ]─────┐"]
-        left += [f"│ {_clip(t, 17):<17}│" for t in (tree or ["(empty)"])]
-        while len(left) < 1 + 6:
-            left.append("│ " + " " * 17 + "│")
-        left.append("├─[ HEX_STREAM ]───┤")
-        raw = getattr(self, "_stats_raw", "") or f"{uptime_s} {used:.0f}G {cpu:.0f}%"
-        data = raw.encode()[:25]
-        hexrows = [" ".join(f"{b:02X}" for b in data[k:k + 5]) for k in range(0, 25, 5)]
-        while len(hexrows) < 5:
-            hexrows.append("")
-        left += [f"│ {h:<17}│" for h in hexrows]
-        left.append("└" + "─" * 18 + "┘")
-
-        # ── right pane: render view ──────────────────────────────────────
-        title = f"RENDER_VIEW : {os.path.basename(os.getcwd()).upper() or 'HOME'}"
-        right_top = "┌─[ " + title + " ]" + "─" * max(0, 53 - len(title) - 5) + "┐"
-        body = [
-            "",
-            f"  v{i.get('version', '')}  {_clip(str(i.get('cwd', '')), 48)}",
-            "",
-        ]
-        if i.get("branch"):
-            body.append(f"  ⎇ {_clip(str(i['branch']), 48)}")
-            body.append("")
+        width = max(len(line) for line in _LOGO)
+        band = None
+        if self._shine_t0 is not None:
+            p = (time.monotonic() - self._shine_t0) / self.SHINE_SECS
+            band = -6 + p * (width + 12)
+        for row, line in enumerate(_LOGO):
+            if row:
+                out.append("\n")
+            for col, ch in enumerate(line):
+                if ch == " ":
+                    out.append(" ")
+                    continue
+                t = col / max(1, width - 1)
+                color = ui.blend(ui.ACCENT, ui.ACCENT_3, t)
+                if band is not None:
+                    k = max(0.0, 1.0 - abs(col + row * 2 - band) / 3.5)
+                    color = ui.blend(color, "#ffffff", 0.75 * k)
+                out.append(ch, style=f"bold {color}")
+            out.append("   ")
+            if row == 0:
+                out.append(f"v{i.get('version', '')}", style=ui.FG_DIM)
+            else:
+                out.append(_short_path(str(i.get("cwd", ""))), style=f"bold {ui.FG}")
+                if i.get("branch"):
+                    out.append("  ⎇ ", style=ui.FG_DIM)
+                    out.append(_clip(str(i["branch"]), 32), style=ui.ACCENT_2)
         ctx = [c for c in (i.get("context") or []) if c]
         if ctx:
-            body.append("  " + " · ".join(ctx[:4]))
-            body.append("")
-        body.append("  / commands · @ files · ! shell · tab agents")
-        while len(body) < len(left) - 2:
-            body.append("")
-        right = [right_top] + ["│" + b.ljust(53) + "│" for b in body[: len(left) - 2]] + ["└" + "─" * 53 + "┘"]
-
-        for n in range(len(left)):
-            out.append("║ ", style=ui.BORDER_FC)
-            lt = left[n] if n < len(left) else " " * 19
-            out.append(lt, style=ui.ACCENT if n in (0, 7, len(left) - 1) else ui.FG_DIM)
-            out.append(" ")
-            rt = right[n] if n < len(right) else " " * 55
-            out.append(rt, style=ui.ACCENT_2 if n == 0 else ui.FG_MUTE)
-            out.append(" ║\n", style=ui.BORDER_FC)
-        out.append("╚" + "═" * 78 + "╝\n", style=ui.BORDER_FC)
-
-        try:
-            import getpass, socket
-
-            host = socket.gethostname().split(".")[0]
-            user = getpass.getuser()
-        except Exception:
-            user, host = "harness", "cybernode"
-        out.append(f"  {user}@{host}:~$ ", style=f"bold {ui.ACCENT}")
-        out.append("█", style=f"bold {ui.ACCENT_2}")
-
-        ctx = [c for c in (i.get("context") or []) if c]
+            out.append("\n\n  ")
+            for n, bit in enumerate(ctx):
+                if n:
+                    out.append(" · ", style=ui.FG_DIM)
+                out.append(bit, style=ui.FG_DIM)
         if i.get("warning"):
             out.append("\n\n  ")
             out.append("● ", style=ui.WARN)
@@ -369,6 +217,9 @@ class WelcomeBlock(Block):
                 out.append("   ")
             out.append(key, style=f"bold {ui.FG_MUTE}")
             out.append(f" {label}", style=ui.FG_DIM)
+        out.append("\n\n  ", style=ui.FG_DIM)
+        out.append("prompt> ", style=f"bold {ui.ACCENT}")
+        out.append("█", style=f"bold {ui.ACCENT_2}")
         return out
 
 
