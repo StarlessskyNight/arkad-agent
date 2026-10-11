@@ -42,6 +42,7 @@ _DESCRIPTIONS: dict[str, str] = {
     "trace.on":      "Show thinking + tool panels in chat (^T trace)",
     "pin.enabled":   "Inject pinned.txt into every system prompt (/pin off to pause)",
     "ui.sticky_prompt": "Pin your prompt at the top while you read its reply",
+    "ui.sidebar":    "Sidebar pin — true / false / null (auto-hide below 150 cols)",
 }
 
 

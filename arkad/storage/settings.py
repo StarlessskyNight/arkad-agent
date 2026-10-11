@@ -62,7 +62,7 @@ DEFAULTS: dict[str, Any] = {
     "think":  {"mode": True, "effort": "high"},
     "trace":  {"on": True},   # show thinking + tool panels in TUI transcript
     "pin":    {"enabled": True},  # inject pinned.txt into every system prompt
-    "ui":     {"sticky_prompt": True},  # pin your prompt above a long reply
+    "ui":     {"sticky_prompt": True, "sidebar": None},  # pin your prompt above a long reply · sidebar (None = auto by width)
     "web":    {"qr": True, "tunnel": "auto"},  # corner QR · Anywhere provider (auto|cloudflare|ngrok)
 }
 
@@ -180,6 +180,22 @@ def _coerce(path: str, value: Any) -> Any:
     if path == "think.effort":
         if value not in _VALID_THINK_EFFORTS:
             raise ValueError(f"think.effort must be one of {_VALID_THINK_EFFORTS}")
+        return value
+    if path == "ui.sidebar":
+        # Tri-state: None = follow terminal width, True/False = pinned.
+        if value is None:
+            return None
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("auto", "default", "null", "none", ""):
+                return None
+            if v in ("true", "1", "yes", "on", "open"):
+                return True
+            if v in ("false", "0", "no", "off", "closed"):
+                return False
+            raise ValueError(f"{path} must be a boolean or 'auto'")
+        if not isinstance(value, bool):
+            raise ValueError(f"{path} must be a boolean or 'auto'")
         return value
     if path in ("skills.global", "mcp.global", "agent.global", "think.mode", "pin.enabled", "ui.mouse",
                 "ui.sticky_prompt", "web.qr"):

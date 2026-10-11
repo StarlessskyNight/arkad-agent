@@ -158,6 +158,29 @@ from .transcript import (  # noqa: E402
 
 from .stats_bar import StatsBar
 _SIDEBAR_MIN_WIDTH = 150
+
+
+def _sidebar_preference() -> bool | None:
+    """Persisted sidebar visibility: ``None`` = auto by terminal width,
+    ``True``/``False`` = pinned open/closed (settings ``ui.sidebar``)."""
+    try:
+        from ..storage.settings import get_settings
+
+        return get_settings().get("ui.sidebar", None)
+    except Exception:
+        return None
+
+
+def _save_sidebar_preference(value: bool | None) -> None:
+    """Persist the pinned sidebar state; a failure must never break the TUI."""
+    try:
+        from ..storage.settings import get_settings
+
+        get_settings().set("ui.sidebar", value)
+    except Exception:
+        pass
+
+
 _PLACEHOLDER = "Ask anything…"
 _BUSY_PLACEHOLDER = "Type a follow-up — it queues (⚡ send now hands it over mid-turn) · esc interrupts"
 # Shown in place of the default placeholder every few turns.
@@ -254,7 +277,7 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
         self._turns_done = 0
         self._last_esc_t = 0.0
         self._app_focused = True
-        self._sidebar_pref: bool | None = None  # None = auto by width
+        self._sidebar_pref: bool | None = _sidebar_preference()  # None = auto by width
         self._mouse_enabled = _mouse_preference()
         from .mouse_toggle import set_app_mouse
 
@@ -760,7 +783,10 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
             sb = self.query_one("#sidebar", Sidebar)
         except Exception:
             return
+        # Pin to the opposite of its current state (never "auto" — toggling is
+        # an explicit choice, so it should survive a restart).
         self._sidebar_pref = sb.has_class("hidden")
+        _save_sidebar_preference(self._sidebar_pref)
         self._apply_sidebar_visibility()
 
     # ─── attachments ─────────────────────────────────────────────────
