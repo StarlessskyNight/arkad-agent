@@ -61,7 +61,8 @@ class _SysStats:
 class StatsBar(Static):
     DEFAULT_CSS = """
     StatsBar {
-        height: 3;
+        /* 3 content rows (logo + logo + credit) + the bottom border. */
+        height: 4;
         width: 100%;
         dock: top;
         border-bottom: solid $jv-border;
