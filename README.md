@@ -1,11 +1,66 @@
-# Arkad Agent
+<p align="center">
+  <img src="assets/arkad-banner.png" alt="Arkad Agent — a terminal-native AI coding agent" width="100%">
+</p>
 
-A terminal-native AI coding agent — starts on the free Arkad Agent tier, with
-opt-in cloud providers (Anthropic, OpenRouter, OpenCode, Codex, models.dev).
-It reads your project, plans, edits files, runs shell commands, and checks its
-own work — with a Textual TUI (default) and a legacy Rich REPL.
+<h1 align="center">Arkad Agent</h1>
 
-Requires Python 3.10+.
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="License: GPL-3.0"></a>
+  <a href="https://github.com/StarlessskyNight/arkad-agent/blob/main/arkad/constants/models.py"><img src="https://img.shields.io/badge/version-1.0.3-orange.svg" alt="Version 1.0.3"></a>
+</p>
+
+<img align="right" width="150" src="assets/arkad-logo.png" alt="Arkad Agent logo">
+
+**Arkad Agent** is a terminal-native AI coding agent: it reads your project, plans the work, edits files, runs commands, and checks its own output. A Textual TUI is the default; a legacy REPL, headless one-shots, and a mobile-friendly browser remote share one streaming agent loop. Fresh installs run on a **free tier with no API key** — connect Anthropic, OpenRouter, OpenCode, Codex, or any [models.dev](https://models.dev/) provider when you want one. Local-first, no telemetry.
+
+## Features
+
+| Area | What you get |
+| --- | --- |
+| **Interfaces** | Textual TUI (default), Rich REPL (`--legacy`), headless `arkad -p "…"`, browser remote (`--web`, `--tunnel` for a public link) |
+| **Models** | Free Arkad Agent tier by default; opt-in Anthropic, OpenRouter, OpenCode Go/Zen, OpenAI Codex, plus ~200 models.dev providers |
+| **Agent loop** | Streamed replies, live file diffs, parallel tool execution, per-turn tool routing, Esc cancels mid-turn |
+| **Tools** | Files, shell with approval rules, web fetch and verified search, docs/OCR, screenshots, macOS control |
+| **Extensibility** | MCP servers, Markdown skills, custom agents and commands, editor snippets for Zed, Neovim, Emacs |
+| **Persistence** | SQLite session history, project context, memory and lessons — all stored locally |
+
+## Screenshots
+
+<!-- Real captures of the shipping interfaces, produced by scripts/_capture_screenshots.py (Textual Pilot, PTY, headless Chromium). No mockups. -->
+
+**Terminal TUI**:
+
+![Arkad TUI welcome screen](assets/screenshots/tui-welcome.png)
+
+**Model picker** — live discovery via `/model`:
+
+![Arkad model picker](assets/screenshots/tui-model-picker.png)
+
+**Legacy REPL** (`arkad --legacy`):
+
+![Arkad legacy Rich REPL](assets/screenshots/repl-legacy.png)
+
+**Browser remote** (`arkad --web`) — phone-friendly session mirror:
+
+![Arkad browser remote](assets/screenshots/web-ui.png)
+
+## Architecture
+
+```mermaid
+flowchart TD
+    CLI["arkad CLI"] --> TUI["Textual TUI (default)"]
+    CLI --> REPL["Rich REPL --legacy"]
+    CLI --> ONE["Headless -p 'prompt'"]
+    CLI --> WEB["Web remote --web"]
+    TUI --> LOOP["Streaming agent loop · tool routing · Esc cancel"]
+    WEB --> LOOP
+    LOOP --> PROV["Providers: free tier · Anthropic · OpenRouter · OpenCode · Codex · models.dev"]
+    LOOP --> TOOLS["Tools: files · shell · web · OCR · MCP"]
+    LOOP --> DB[("SQLite sessions · memory · lessons")]
+```
+
+One process, four front-ends: every UI renders the same loop, so TUI and browser can mirror one session.
 
 ## Install
 
@@ -21,115 +76,52 @@ Windows (PowerShell):
 powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/install.ps1 | iex"
 ```
 
-Uninstall (removes everything — install, config, data, shims, PATH entries):
-
-```bash
-# Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/uninstall | bash
-```
-
-```powershell
-# Windows (PowerShell)
-powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/uninstall.ps1 | iex"
-```
-
 From a checkout:
 
 ```bash
-# from a checkout
-cd arkad-agent
 python3 -m venv .venv
 .venv/bin/pip install -e .
-.venv/bin/arkad-agent        # or: arkad
-
-# or the installer script
-./scripts/install
+.venv/bin/arkad          # or: arkad
 ```
 
 ## Usage
 
 ```bash
-arkad                  # Textual TUI (default)
-arkad --legacy         # Rich REPL
-arkad --web [PORT]     # browser mirror of the console
-arkad update           # pull latest and reinstall (alias: arkad upgrade)
+arkad                      # TUI
+arkad --legacy             # Rich REPL
+arkad -p "fix the tests"   # headless run, then exit
+arkad --web                # browser remote (loopback + token)
+arkad update               # self-update
 ```
 
-Inside the session: slash commands (`/model`, `/mcp`, `/memory`, `/skill`, …),
-agent switching, persistent memory, lessons, session history, MCP servers.
+In-session: `/model`, `/key`, `/provider` switch backends; `/mcp`, `/agent`, `/skill`, `/memory` extend them.
 
-## Models & providers
+## Configuration
 
-- Out of the box Arkad uses the free **Arkad Agent** tier — no API key needed.
-- Cloud providers — Anthropic, OpenRouter, OpenCode (Go + Zen), OpenAI Codex,
-  and models.dev catalog providers — are opt-in via `/login`, `/key`, or the
-  provider file at `~/.config/arkad-agent/provider`.
-- Switch models with `/model`; `/provider` (or the TUI provider hub) changes backend.
-
-## Repository layout
-
-```
-agent.py               Thin entrypoint -> arkad/tui/app.py (default) or arkad/main.py (--legacy)
-arkad/                 Main package
-  cli.py               argparse entrypoint: `arkad` / `arkad-agent`
-  main.py              Legacy Rich REPL loop
-  loop.py              Agentic tool-call loop
-  state.py             Module-level shared state (client, messages, model, flags)
-  bootstrap.py         Startup wiring
-  console.py, media.py, path_resolve.py, project_context.py, install_sync.py, updater.py, …
-  auth/                API key, OAuth PKCE, OpenRouter/OpenCode/Codex clients, provider catalogs
-  commands/            Slash command handlers (dispatch.py routes)
-  constants/           Paths, model/provider ids, system prompt, OAuth endpoints
-  mcp/                 MCP server install/manager/registry/config/auth
-  repl/                Stream handling, rendering, hallucination guard, context trimming
-  storage/             SQLite sessions, memory, skills, lessons, prefs, settings
-  tools/               Tool implementations; router.py picks schemas per turn
-    mac/               macOS control (apps, AppleScript, UI, clicks, keystrokes, clipboard)
-    web/               Web fetch + verified-source search
-    context/           Context bundling helpers
-  tui/                 Textual app, modals (provider/model/mcp/session/…), transcript
-  utils/               clipboard, paths, json repair, http, schema, tool repair
-  web/                 Browser mirror UI + actions/commands APIs
-editors/               Zed / Neovim / Emacs integration snippets
-scripts/               install, install-global, install.ps1, test-install, …
-tests/                 pytest suite (conftest isolates HOME)
-.arkad/                Project-local agents (coding.md, fast.md, qa-help.md, …) and skills
-assets/                Logos + social preview
-```
-
-## Data & config
-
-- Global config: `~/.config/arkad-agent/` (sessions.db, provider, settings.json)
-- User agents/skills/commands: `~/.arkad/`
-- Project-local overrides: `.arkad/` in the repo
-- Sessions/lessons/memory are compact SQLite/JSON by design. No telemetry.
-
-## Environment variables
-
-| Var | Default | Meaning |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `ARKAD_PROVIDER` | *(auto)* | Force provider: `anthropic`, `openrouter`, `opencode`, `opencode_zen`, `openai_codex` |
-| `CLAUDE_MODEL` | *(unset)* | Override model id at startup |
-| `ARKAD_MAX_PARALLEL_TOOLS` | `64` | Cap on parallel tool calls |
-| `ARKAD_MAX_ITERATIONS` | `50` | Max model→tool iterations in one turn (runaway guard) |
-| `ARKAD_HTTP_READ_TIMEOUT` | 240–600s | Max seconds between bytes on a streaming response |
-| `ARKAD_HTTP_CONNECT_TIMEOUT` | `30` | Connection timeout in seconds |
-| `ARKAD_WEB_HOST` | `127.0.0.1` | Bind address for `--web`. Set `0.0.0.0` for LAN/phone access — any device on the network then receives the auth token automatically on first visit, so only use it on a network you trust |
+| `ARKAD_PROVIDER` | *(auto)* | Pin a provider: `anthropic`, `openrouter`, `opencode`, `opencode_zen`, `openai_codex`, `md:<id>` |
+| `CLAUDE_MODEL` | free-tier default | Override the startup model |
+| `ARKAD_WEB_HOST` | `127.0.0.1` | Bind address for `--web` |
+| `ARKAD_MAX_ITERATIONS` | `50` | Runaway guard per turn |
+| `ARKAD_MODELS_DEV` | on | Set `0` to disable the models.dev catalog |
 
-## Security notes
+Keys live in the environment or `~/.config/arkad-agent/provider`; project `.mcp.json` servers require approval before running.
 
-- **Project MCP servers**: a repo's `.mcp.json` can run commands at startup. Arkad only auto-connects project servers you have approved before (stored in `~/.config/arkad-agent/mcp_trust.json`, keyed by project + command hash). New project servers are skipped at startup and listed by `mcp_list` as untrusted — approve them explicitly with `mcp_connect` or `/mcp connect`.
-- **Shell approval**: read-only commands auto-approve only when the whole command is free of shell operators (`;`, `&&`, `|`, redirects, substitution). Anything chained or redirected asks you first.
-- **Web remote**: binds loopback by default; the token is only handed to a direct visit from this machine (checked via `Host`, `Sec-Fetch-Site`, `Origin`).
-- **Context overflow**: if a provider rejects a request as too long, Arkad trims history aggressively and retries once before giving up with an actionable error.
+## Extending & contributing
 
-## Development
+Drop Markdown into `.arkad/` (agents, skills, commands) or `~/.arkad/`. New tools live in `arkad/tools/` — schema plus dispatch. Development:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest tests -q
-
 ```
+
+Issues and pull requests are welcome.
+
+### Acknowledgements
+
+Provider and model details (context size, prices, tool support) come from [models.dev](https://models.dev/), an open database by the OpenCode team (MIT licence, © models.dev).
 
 ## License
 
