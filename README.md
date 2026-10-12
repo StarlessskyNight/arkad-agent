@@ -12,7 +12,11 @@
 
 <img align="right" width="150" src="assets/arkad-logo.png" alt="Arkad Agent logo">
 
+## About
+
 **Arkad Agent** is a terminal-native AI coding agent: it reads your project, plans the work, edits files, runs commands, and checks its own output. A Textual TUI is the default; a legacy REPL, headless one-shots, and a mobile-friendly browser remote share one streaming agent loop. Fresh installs run on a **free tier with no API key** — connect Anthropic, OpenRouter, OpenCode, Codex, or any [models.dev](https://models.dev/) provider when you want one. Local-first, no telemetry.
+
+One Python package — no daemon, no account, everything stays on disk.
 
 ## Features
 
