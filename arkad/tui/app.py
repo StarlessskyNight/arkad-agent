@@ -421,6 +421,12 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
         self._bg_detach()
         self._mcp_auth_detach()
         try:
+            from ..mcp.registry import shutdown_mcp
+
+            shutdown_mcp()  # close MCP children now; atexit is only the backstop
+        except Exception:
+            pass
+        try:
             from .. import file_changes
 
             file_changes.flush()

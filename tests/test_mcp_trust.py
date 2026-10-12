@@ -199,3 +199,93 @@ class TestTeardownHook:
         monkeypatch.setattr(reg.mcp_registry, "disconnect_all", boom)
         monkeypatch.setattr(reg, "_loop", None)
         reg._teardown_at_exit()  # must not raise
+
+
+class TestShutdownMcp:
+    def test_shutdown_releases_all_and_stops_loop(self, monkeypatch):
+        from arkad.mcp import registry as reg
+
+        disconnected: list[str] = []
+        monkeypatch.setattr(reg.mcp_registry, "disconnect", disconnected.append)
+        monkeypatch.setattr(
+            reg.mcp_registry, "_servers",
+            {"a": object(), "b": object()},
+        )
+        monkeypatch.setattr(reg.mcp_registry, "_pending", {})
+        loop = type("Loop", (), {"stop": lambda self: disconnected.append("stop")})()
+        real_loop, reg._loop = reg._loop, loop
+        try:
+            reg.shutdown_mcp()
+        finally:
+            reg._loop = real_loop
+        assert disconnected == ["a", "b", "stop"]
+        assert reg._loop is None
+
+    def test_shutdown_connect_includes_pending(self, monkeypatch):
+        from arkad.mcp import registry as reg
+
+        disconnected: list[str] = []
+        monkeypatch.setattr(reg.mcp_registry, "disconnect", disconnected.append)
+        monkeypatch.setattr(reg.mcp_registry, "_servers", {"a": object()})
+        monkeypatch.setattr(reg.mcp_registry, "_pending", {"c": object()})
+        loop = type("Loop", (), {"stop": lambda self: disconnected.append("stop")})()
+        real_loop, reg._loop = reg._loop, loop
+        try:
+            reg.shutdown_mcp()
+        finally:
+            reg._loop = real_loop
+        assert disconnected == ["a", "c", "stop"]
+
+    def test_shutdown_never_raises(self, monkeypatch):
+        from arkad.mcp import registry as reg
+
+        def boom(_name=None):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(reg.mcp_registry, "disconnect", boom)
+        monkeypatch.setattr(reg.mcp_registry, "_servers", {"a": object()})
+        monkeypatch.setattr(reg.mcp_registry, "_pending", {})
+        monkeypatch.setattr(reg, "_loop", None)
+        reg.shutdown_mcp()  # must not raise
+
+    def test_disconnect_partial_failure_still_cleans_rest(self, monkeypatch):
+        from arkad.mcp import registry as reg
+
+        seen: list[str] = []
+
+        def flaky(name):
+            seen.append(name)
+            if name == "a":
+                raise RuntimeError("one bad child")
+
+        monkeypatch.setattr(reg.mcp_registry, "disconnect", flaky)
+        monkeypatch.setattr(
+            reg.mcp_registry, "_servers",
+            {"a": object(), "b": object()},
+        )
+        monkeypatch.setattr(reg.mcp_registry, "_pending", {})
+        reg.mcp_registry.disconnect_all()
+        assert seen == ["a", "b"]  # b still released after a failed
+
+
+class TestExplicitShutdownPaths:
+    """Ordinary disconnects, cancellation, and app shutdown must release
+    connections directly — the atexit hook is only the backstop."""
+
+    def test_cli_calls_shutdown_on_both_paths(self):
+        import arkad.cli as cli_mod
+
+        src = open(cli_mod.__file__).read()
+        assert src.count("shutdown_mcp()") >= 2, "legacy + TUI paths must both shut down MCP"
+
+    def test_main_headless_calls_shutdown(self):
+        import arkad.main as main_mod
+
+        src = open(main_mod.__file__).read()
+        assert "shutdown_mcp()" in src, "headless -p path must shut down MCP"
+
+    def test_tui_unmount_calls_shutdown(self):
+        import arkad.tui.app as app_mod
+
+        src = open(app_mod.__file__).read()
+        assert "shutdown_mcp()" in src, "TUI on_unmount must shut down MCP"

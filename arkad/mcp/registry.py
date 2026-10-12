@@ -249,21 +249,20 @@ def _install_atexit_teardown() -> None:
 
 
 def _teardown_at_exit() -> None:
-    """atexit hook, also safe to call directly and repeatedly: disconnect every
-    server (stdio children see EOF instead of being orphaned) and stop the
-    event-loop thread."""
-    global _loop
+    """atexit hook: ``shutdown_mcp()`` with a final guard, because nothing
+    may raise out of the interpreter shutdown path. Also safe to call
+    directly and repeatedly.
+
+    This hook is only the backstop. Ordinary disconnects, cancellation, and
+    normal app shutdown call ``shutdown_mcp()`` directly (``main.py`` /
+    ``cli.py`` ``finally`` paths, TUI ``on_unmount``); forced termination
+    (SIGKILL, ``os._exit``) runs neither path and can still orphan children —
+    that is inherent to atexit, documented here rather than papered over.
+    """
     try:
-        mcp_registry.disconnect_all()
+        shutdown_mcp()
     except Exception:
-        logger.debug("mcp shutdown: disconnect_all failed", exc_info=True)
-    with _lock:
-        loop_obj, _loop = _loop, None
-    if loop_obj is not None:
-        try:
-            loop_obj.stop()
-        except Exception:
-            pass
+        pass
 
 
 # ── tool schema helpers ──────────────────────────────────────────────────
@@ -1286,11 +1285,23 @@ class MCPRegistry:
         return None
 
     def disconnect_all(self) -> None:
-        """Disconnect all MCP servers — connected and still-connecting alike."""
+        """Disconnect all MCP servers — connected and still-connecting alike.
+
+        Ordinary disconnects, cancellation, and normal process shutdown
+        (``disconnect_all`` is called from the app ``finally`` paths in
+        ``main.py`` / ``cli.py``, the TUI ``on_shutdown``, and the atexit
+        hook) all funnel through here. Asynchronous-shutdown races
+        (interpreter already tearing down, GIL half-gone) are absorbed: the
+        atexit hook wraps this in a broad guard, and partial cleanup is
+        still better than a leaked child process.
+        """
         with self._lock:
             names = list(dict.fromkeys([*self._servers, *self._pending]))
         for name in names:
-            self.disconnect(name)
+            try:
+                self.disconnect(name)
+            except Exception:
+                continue
 
     # ── tool call routing ────────────────────────────────────────────────
 
@@ -1461,6 +1472,30 @@ def as_prompt_block() -> str:
             "No MCP servers connected — open /mcp and connect before calling MCP tools."
         )
     return "\n".join(lines)
+
+
+def shutdown_mcp() -> None:
+    """Release every MCP connection: disconnect all servers, then stop the
+    event-loop thread (in that order — stopping the loop first would strand
+    the disconnect coroutines with nowhere to run).
+
+    Called from the normal shutdown paths — ``main.py`` interactive/``-p``
+    ``finally``, ``cli.py`` after ``app.run()``, TUI ``on_unmount`` — with the
+    atexit hook as a backstop. Also the single choke point for the shutdown
+    tests. Never raises: nothing here may break an in-flight shutdown.
+    """
+    global _loop
+    try:
+        mcp_registry.disconnect_all()
+    except Exception:
+        logger.debug("mcp shutdown: disconnect_all failed", exc_info=True)
+    with _lock:
+        loop_obj, _loop = _loop, None
+    if loop_obj is not None:
+        try:
+            loop_obj.stop()
+        except Exception:
+            pass
 
 
 def auto_connect_servers(

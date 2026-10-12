@@ -1,6 +1,8 @@
 """Call the configured model API with streaming + retry + OAuth refresh."""
 import ctypes
+import json
 import os
+import queue
 import threading
 import time
 from typing import Any, Dict
@@ -43,8 +45,8 @@ from .. import state
 from .system import build_system
 from ..media import materialize_uploads
 from .trim import (
-    _content_chars, _total_chars, anthropic_wire_messages, force_trim_messages,
-    prune_tool_images, trim_messages,
+    _content_chars, _total_chars, CHAR_BUDGET, anthropic_wire_messages,
+    force_trim_messages, prune_tool_images, trim_messages,
 )
 from .render import assistant_model_label
 from .stream_display import RichAssistantStreamDisplay
@@ -57,6 +59,7 @@ _current_stream = None
 
 # One aggressive-trim recovery per turn (reset at the top of every turn).
 _context_recovered = False
+
 
 # ── Context-overflow recovery ─────────────────────────────────────────────
 # Provider messages that mean "your history no longer fits the window".
@@ -84,13 +87,74 @@ def _is_context_length_error(e) -> bool:
     return any(p in text for p in _CONTEXT_LENGTH_PATTERNS)
 
 
+def _newest_turn_content() -> Any:
+    """Content of the newest user message in ``state.messages`` ("" when none)."""
+    for msg in reversed(state.messages):
+        if msg.get("role") == "user":
+            return msg.get("content", "")
+    return ""
+
+
+def _newest_turn_exceeds_budget() -> bool:
+    """True when the current user turn alone is already over CHAR_BUDGET.
+
+    Trimming only touches *older* history, so a single oversized turn can
+    never be rescued by a retry — the caller must say so instead of burning
+    another model call on an inevitably oversized request.
+    """
+    return _content_chars(_newest_turn_content()) > CHAR_BUDGET
+
+
+def _context_exhausted_error() -> ArkadAPIError:
+    """Final error after context-overflow recovery failed or was refused.
+
+    Distinguishes the two cases the retry policy cares about: a lone
+    oversized turn (trimming could never help — say exactly what to do
+    instead of burning another call) vs. genuinely exhausted history.
+    """
+    if _newest_turn_exceeds_budget():
+        newest_n = _content_chars(_newest_turn_content())
+        return ArkadAPIError(
+            "context window exceeded: the current message alone "
+            f"(~{newest_n // 4:,} tokens) is larger than the "
+            f"{CHAR_BUDGET // 4:,} token budget — trimming history "
+            "can't help. Split it up: paste a smaller excerpt, use "
+            "@file refs to select parts, read files with "
+            "read_file/read_bundle instead of pasting them, or "
+            "start a new session (/new)."
+        )
+    return ArkadAPIError(
+        "context window exceeded even after trimming — "
+        "start a new session (/new) or use /trim"
+    )
+
+
 def _recover_from_context_overflow() -> bool:
     """Trim history aggressively and retry the request once per turn.
 
     Returns True when the caller should retry, False when recovery already
-    happened this turn (the caller must surface the error instead)."""
+    happened this turn (the caller must surface the error instead).
+
+    Refuses to retry when the single newest user turn alone exceeds the
+    budget: no amount of history trimming can make that request fit, and
+    a retry would burn another attempt on an inevitably oversized payload.
+    """
     global _context_recovered
     if _context_recovered:
+        return False
+    if _newest_turn_exceeds_budget():
+        # The current message alone exceeds the budget: trimming older
+        # history can't help. Print guidance now; the caller raises the
+        # matching error without retrying an inevitably oversized request.
+        newest_n = _content_chars(_newest_turn_content())
+        console.print(
+            f"[red]context window exceeded: the current message alone "
+            f"(~{newest_n // 4:,} tokens) is larger than the {CHAR_BUDGET // 4:,} "
+            "token budget — trimming history can't help.[/]\n"
+            "[yellow]Split it up: paste a smaller excerpt, use @file refs to "
+            "select parts, read files with read_file/read_bundle instead of "
+            "pasting them, or start a new session (/new).[/]"
+        )
         return False
     _context_recovered = True
     console.print(
@@ -835,10 +899,7 @@ def _call_claude_stream():
             if _is_context_length_error(e):
                 if _recover_from_context_overflow():
                     continue
-                raise ArkadAPIError(
-                    "context window exceeded even after trimming — "
-                    "start a new session (/new) or use /trim"
-                )
+                raise _context_exhausted_error()
             if e.status_code == 402:
                 console.print(
                     f"[red]Payment required — Provider: {state.provider}[/]\n"
@@ -965,8 +1026,5 @@ def _call_claude_stream():
             if _is_context_length_error(e):
                 if _recover_from_context_overflow():
                     continue
-                raise ArkadAPIError(
-                    "context window exceeded even after trimming — "
-                    "start a new session (/new) or use /trim"
-                )
+                raise _context_exhausted_error()
             raise

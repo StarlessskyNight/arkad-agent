@@ -234,6 +234,10 @@ def run_headless(prompt: str) -> int:
     except Exception as e:
         console.print(f"[red]error: {type(e).__name__}: {e}[/]")
         return 1
+    finally:
+        from .mcp.registry import shutdown_mcp
+
+        shutdown_mcp()
     return 0
 
 

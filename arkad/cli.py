@@ -220,11 +220,21 @@ def main() -> None:
     if args.legacy:
         from .main import main as legacy_main
 
-        legacy_main()
+        try:
+            legacy_main()
+        finally:
+            from .mcp.registry import shutdown_mcp
+
+            shutdown_mcp()
     else:
         from .tui.app import run
 
-        run()
+        try:
+            run()
+        finally:
+            from .mcp.registry import shutdown_mcp
+
+            shutdown_mcp()
 
 
 if __name__ == "__main__":

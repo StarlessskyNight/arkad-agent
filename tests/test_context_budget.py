@@ -227,6 +227,12 @@ def arkad(monkeypatch):
     return SimpleNamespace(install=install, state=state)
 
 
+def _huge_turn_text():
+    """A single user message that alone exceeds CHAR_BUDGET (pasted giant file)."""
+    from arkad.repl.trim import CHAR_BUDGET
+    return "pasted file:\n" + "z" * (CHAR_BUDGET + 10_000)
+
+
 def _context_overflow():
     raise _status_error("prompt is too long: 250000 tokens > 200000 maximum", 400)
 
@@ -268,6 +274,26 @@ class TestOverflowRecovery:
         with pytest.raises(Exception):  # raw SDK error: unhandled 400s re-raise (pre-existing)
             stream.call_claude_stream()
         assert client.messages.calls == 1  # no trim, no retry
+        assert trimmed == []
+
+    def test_oversized_single_turn_skips_retry(self, arkad, monkeypatch):
+        """A current message that alone exceeds the budget refuses outright:
+        trimming older history cannot help, so no retry is attempted."""
+        trimmed = []
+        monkeypatch.setattr(
+            stream, "force_trim_messages", lambda: trimmed.append(True)
+        )
+
+        def always_overflow():
+            raise _context_overflow()
+
+        client = arkad.install([always_overflow])
+        arkad.state.messages[:] = [{"role": "user", "content": _huge_turn_text()}]
+        with pytest.raises(ArkadAPIError) as exc:
+            stream.call_claude_stream()
+        assert "current message alone" in str(exc.value)
+        assert "@file" in str(exc.value)  # actionable guidance
+        assert client.messages.calls == 1  # no futile retry
         assert trimmed == []
 
     def test_detection_helper(self):
