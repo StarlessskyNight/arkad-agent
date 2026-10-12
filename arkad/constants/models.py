@@ -16,7 +16,7 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
     return max(min_value, min(max_value, value))
 
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 # Startup model: CLAUDE_MODEL env override, else the free tier's fallback until
 # startup picks from the live list (arkad_agent_default_model).
 MODEL = os.getenv("CLAUDE_MODEL", ARKAD_AGENT_FALLBACK_MODEL)
