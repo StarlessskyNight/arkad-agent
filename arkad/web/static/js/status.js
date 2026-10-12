@@ -113,7 +113,7 @@ let lastFavicon = '';
 
 function syncFavicon(s) {
   const kind = !s.connected ? 'offline' : s.activePrompt ? 'wait' : s.busy ? 'busy' : 'idle';
-  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb').trim() || '74, 222, 128';
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb').trim() || '0, 136, 255';
   const key = `${kind}|${accent}`;
   if (key === lastFavicon) return;
   lastFavicon = key;

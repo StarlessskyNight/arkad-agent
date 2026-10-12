@@ -28,10 +28,17 @@ class RichAssistantStreamDisplay:
         self._live.start()
 
     def _panel(self) -> Panel:
+        # Resolve the border from the live theme (nightwing's neon glow,
+        # rose's magenta, …) so a /theme switch recolors the stream too.
+        try:
+            from ..tui import theme as ui
+            border = ui.ACCENT_2
+        except Exception:  # pragma: no cover — Rich REPL without TUI module
+            border = "#00d2ff"
         return Panel(
             Markdown(self._buf or " "),
             title=self._title,
-            border_style="magenta",
+            border_style=border,
             padding=(0, 1),
         )
 

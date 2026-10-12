@@ -8,37 +8,40 @@
  */
 :root {
   color-scheme: dark;
-  --bg: #000000;
-  --green: #4ade80;
+  /* Nightwing palette (matches arkad/tui/theme.py): midnight black base,
+     Stalker Navy panels, Escrima Steel chrome, Acrobat Silver text,
+     Electric Blue accent with Neon Glow highlights. */
+  --bg: #05070a;
+  --green: #56d364;
   --green-deep: #22c55e;
   --amber: #fbbf24;
   --red: #f87171;
 
-  --text: #fafafa;
-  --text-2: #a3a3a3;
-  --text-3: #737373;
+  --text: #b9cadb;
+  --text-2: #8fa3ba;
+  --text-3: #4a5d78;
 
-  --glass: rgba(10, 10, 10, 0.66);
-  --glass-strong: rgba(14, 14, 14, 0.86);
-  --card: rgba(255, 255, 255, 0.03);
-  --card-hover: rgba(255, 255, 255, 0.055);
-  --card-sunk: rgba(0, 0, 0, 0.45);
-  --tile: linear-gradient(180deg, #171717, #0c0c0c);
-  --line: rgba(255, 255, 255, 0.085);
-  --line-2: rgba(255, 255, 255, 0.15);
-  --highlight: rgba(255, 255, 255, 0.05);
+  --glass: rgba(12, 22, 46, 0.66);
+  --glass-strong: rgba(10, 18, 38, 0.88);
+  --card: rgba(185, 202, 219, 0.04);
+  --card-hover: rgba(185, 202, 219, 0.07);
+  --card-sunk: rgba(3, 6, 12, 0.5);
+  --tile: linear-gradient(180deg, #16223f, #0c162e);
+  --line: rgba(74, 93, 120, 0.35);
+  --line-2: rgba(74, 93, 120, 0.55);
+  --highlight: rgba(185, 202, 219, 0.05);
   --focus: rgba(var(--accent-rgb), 0.55);
 
   /* Theme accent (Appearance → Accent): only the rgb triplet + deep shade
      change per accent; everything else derives from them. */
-  --accent-rgb: 74, 222, 128;
-  --accent-deep: #22c55e;
+  --accent-rgb: 0, 136, 255;
+  --accent-deep: #0062cc;
   --on-accent: #ffffff;
   --accent: rgb(var(--accent-rgb));
   --accent-soft: rgba(var(--accent-rgb), 0.09);
   --accent-line: rgba(var(--accent-rgb), 0.32);
   --ok: var(--green);
-  --ok-soft: rgba(74, 222, 128, 0.1);
+  --ok-soft: rgba(86, 211, 100, 0.1);
   --warn: var(--amber);
   --warn-soft: rgba(251, 191, 36, 0.1);
   --warn-line: rgba(251, 191, 36, 0.32);
@@ -46,16 +49,16 @@
   --danger-soft: rgba(248, 113, 113, 0.1);
   --danger-line: rgba(248, 113, 113, 0.35);
 
-  --primary-bg: #fafafa;
-  --primary-hover: #ffffff;
-  --primary-fg: #0a0a0a;
+  --primary-bg: #0088ff;
+  --primary-hover: #2e9bff;
+  --primary-fg: #ffffff;
 
-  --you-fill: rgba(255, 255, 255, 0.07);
-  --you-line: rgba(255, 255, 255, 0.13);
-  --code-bg: #070707;
-  --code-line: rgba(255, 255, 255, 0.08);
-  --code-text: #e5e5e5;
-  --code-dim: #8a8a8a;
+  --you-fill: rgba(0, 136, 255, 0.08);
+  --you-line: rgba(0, 136, 255, 0.2);
+  --code-bg: #070d1c;
+  --code-line: rgba(74, 93, 120, 0.3);
+  --code-text: #b9cadb;
+  --code-dim: #4a5d78;
 
   --blur: 20px;
   --blur-strong: 28px;
@@ -181,11 +184,13 @@
 }
 
 /* Accents — dark values first, then light-mode shades (darker for contrast). */
+:root[data-accent="nightwing"] { --accent-rgb: 0, 136, 255; --accent-deep: #0062cc; --on-accent: #ffffff; }
 :root[data-accent="blue"] { --accent-rgb: 96, 165, 250; --accent-deep: #3b82f6; }
 :root[data-accent="orange"] { --accent-rgb: 251, 146, 60; --accent-deep: #ea580c; }
 :root[data-accent="rose"] { --accent-rgb: 251, 113, 133; --accent-deep: #e11d48; }
 :root[data-accent="teal"] { --accent-rgb: 45, 212, 191; --accent-deep: #0d9488; }
 :root[data-accent="mono"] { --accent-rgb: 245, 245, 245; --accent-deep: #e5e5e5; --on-accent: #0a0a0a; }
+:root[data-theme="light"][data-accent="nightwing"] { --accent-rgb: 0, 106, 204; --accent-deep: #00539e; --on-accent: #ffffff; }
 :root[data-theme="light"][data-accent="blue"] { --accent-rgb: 37, 99, 235; --accent-deep: #1d4ed8; }
 :root[data-theme="light"][data-accent="orange"] { --accent-rgb: 234, 88, 12; --accent-deep: #c2410c; }
 :root[data-theme="light"][data-accent="rose"] { --accent-rgb: 225, 29, 72; --accent-deep: #be123c; }
@@ -305,8 +310,8 @@ body.is-offline .glow { opacity: 0.15; }
      - State dots lose their glow. Colour alone carries the state; a halo
        around an 8px dot is what made the old UI look lit from inside. */
 :root[data-surface="glass"] {
-  --glass: rgba(18, 20, 25, 0.72);
-  --glass-strong: rgba(16, 18, 23, 0.86);
+  --glass: rgba(12, 20, 42, 0.72);
+  --glass-strong: rgba(10, 17, 36, 0.88);
   --card: rgba(255, 255, 255, 0.04);
   --card-hover: rgba(255, 255, 255, 0.07);
   --card-sunk: rgba(0, 0, 0, 0.32);
@@ -323,16 +328,16 @@ body.is-offline .glow { opacity: 0.15; }
   /* The top bar and composer float over the transcript (layout.css), so
      they get a thinner, lighter-blurred glass: at the panel density above,
      white-on-black text underneath frosts to an invisible haze. */
-  --chrome: rgba(18, 20, 25, 0.62);
+  --chrome: rgba(10, 18, 38, 0.62);
   --chrome-blur: 14px;
   --shadow: 0 18px 46px -24px rgba(0, 0, 0, 0.78);
   --shadow-lg: 0 34px 90px -28px rgba(0, 0, 0, 0.84);
 
-  /* Ambient mesh: barely there. Dark themes get a cool neutral wash; the
-     accent barely registers so no mode turns green. */
+  /* Ambient mesh: barely there — a cool navy wash with the electric-blue
+     accent barely registering, so no mode turns bright. */
   --amb-1: color-mix(in oklab, var(--accent) 11%, transparent);
-  --amb-2: rgba(96, 130, 255, 0.11);
-  --amb-3: rgba(176, 110, 255, 0.085);
+  --amb-2: rgba(0, 136, 255, 0.1);
+  --amb-3: rgba(0, 210, 255, 0.07);
 }
 
 :root[data-surface="glass"][data-theme="dim"] {
@@ -501,7 +506,7 @@ body.is-offline .glow { opacity: 0.15; }
 /* System "Reduce transparency": the glass palette stays, but every panel
    is solid (the colour each one shows over the plain backdrop). */
 @media (prefers-reduced-transparency: reduce) {
-  :root[data-surface="glass"] { --glass: #0e0f13; --glass-strong: #101116; --chrome: #0e0f13; --blur: 0px; --blur-strong: 0px; --chrome-blur: 0px; }
+  :root[data-surface="glass"] { --glass: #0a1122; --glass-strong: #0c1428; --chrome: #0a1122; --blur: 0px; --blur-strong: 0px; --chrome-blur: 0px; }
   :root[data-surface="glass"][data-theme="dim"] { --glass: #25272e; --glass-strong: #272931; --chrome: #25272e; }
   :root[data-surface="glass"][data-theme="light"] { --glass: #fdfdfd; --glass-strong: #ffffff; --chrome: #fdfdfd; }
   :root[data-surface="glass"][data-theme="light"][data-variant="soft"] { --glass: #fdfaf5; --glass-strong: #fefcf7; --chrome: #fdfaf5; }
@@ -530,8 +535,8 @@ body.is-offline .glow { opacity: 0.15; }
 }
 
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .glass { background: rgba(10, 10, 10, 0.94); }
-  .glass-strong { background: rgba(14, 14, 14, 0.98); }
+  .glass { background: rgba(8, 13, 26, 0.96); }
+  .glass-strong { background: rgba(10, 16, 32, 0.98); }
   :root[data-theme="dim"] .glass { background: rgba(38, 39, 45, 0.96); }
   :root[data-theme="dim"] .glass-strong { background: rgba(44, 45, 52, 0.98); }
   :root[data-theme="light"] .glass,
@@ -633,7 +638,7 @@ body.is-offline .mark::before { background: var(--text-3); box-shadow: none; }
   border-color: transparent;
   color: var(--primary-fg);
   background: var(--primary-bg);
-  box-shadow: 0 6px 20px -10px rgba(255, 255, 255, 0.35);
+  box-shadow: 0 6px 20px -10px rgba(0, 136, 255, 0.45);
 }
 .btn-primary:hover:not(:disabled) { background: var(--primary-hover); border-color: transparent; }
 :root[data-theme="light"] .btn-primary { box-shadow: 0 6px 18px -10px rgba(0, 0, 0, 0.5); }

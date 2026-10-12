@@ -467,9 +467,9 @@
 .mode-look i:nth-child(1) { left: 8px; top: 8px; width: 20%; bottom: 8px; }
 .mode-look i:nth-child(2) { left: calc(20% + 16px); top: 10px; right: 10px; height: 8px; }
 .mode-look i:nth-child(3) { left: calc(20% + 16px); top: 24px; right: 22%; height: 22px; border-radius: 6px; }
-.mode-dark { background: #000; }
-.mode-dark i { background: #1c1c1c; }
-.mode-dark i:nth-child(3) { background: #141414; box-shadow: inset 0 0 0 1px #2a2a2a; }
+.mode-dark { background: #05070a; }
+.mode-dark i { background: #0c162e; }
+.mode-dark i:nth-child(3) { background: #16223f; box-shadow: inset 0 0 0 1px #4a5d78; }
 .mode-dim { background: #1c1d21; }
 .mode-dim i { background: #313238; }
 .mode-dim i:nth-child(3) { background: #27282d; box-shadow: inset 0 0 0 1px #3a3b42; }
