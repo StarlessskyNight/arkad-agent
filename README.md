@@ -10,8 +10,6 @@
   <a href="https://github.com/StarlessskyNight/arkad-agent/blob/main/arkad/constants/models.py"><img src="https://img.shields.io/badge/version-1.0.3-orange.svg" alt="Version 1.0.3"></a>
 </p>
 
-<img align="right" width="150" src="assets/arkad-logo.png" alt="Arkad Agent logo">
-
 ## About
 
 **Arkad Agent** is a terminal-native AI coding agent: it reads your project, plans the work, edits files, runs commands, and checks its own output. A Textual TUI is the default; a legacy REPL, headless one-shots, and a mobile-friendly browser remote share one streaming agent loop. Fresh installs run on a **free tier with no API key** — connect Anthropic, OpenRouter, OpenCode, Codex, or any [models.dev](https://models.dev/) provider when you want one. Local-first, no telemetry.
