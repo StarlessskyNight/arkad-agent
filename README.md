@@ -84,6 +84,18 @@ python3 -m venv .venv
 .venv/bin/arkad          # or: arkad
 ```
 
+Uninstall (removes install, config, data, shims, and PATH entries):
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/uninstall | bash
+```
+
+```powershell
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/StarlessskyNight/arkad-agent/main/scripts/uninstall.ps1 | iex"
+```
+
 ## Usage
 
 ```bash
