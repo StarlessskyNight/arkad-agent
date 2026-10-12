@@ -7,9 +7,21 @@ def memory_save(text: str | None = None, fact: str | None = None) -> str:
 
     ``text`` is the canonical tool argument. ``fact`` is accepted as a
     compatibility alias because some models try that name despite the schema.
+
+    Obvious secret material (API keys, tokens, PEM blocks) is redacted to
+    ``[redacted]`` by ``storage.memory`` before it ever reaches disk; this
+    wrapper adds the notice so the model knows why the text changed.
     """
-    saved = mem.add_fact(text if text is not None else fact)
-    return f"saved #{saved['id']}: {saved['text']}"
+    raw = text if text is not None else fact
+    scrubbed, redacted = mem.scrub_secrets(raw) if isinstance(raw, str) else (raw, False)
+    saved = mem.add_fact(scrubbed)
+    out = f"saved #{saved['id']}: {saved['text']}"
+    if redacted:
+        out += (
+            "\nNote: secret-looking value(s) were replaced with [redacted] — "
+            "API keys, tokens and passwords must not be stored in memory."
+        )
+    return out
 
 
 def memory_list() -> str:

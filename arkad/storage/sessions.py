@@ -10,6 +10,22 @@ def db_conn() -> sqlite3.Connection:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     c = sqlite3.connect(str(SESSIONS_DB))
     c.row_factory = sqlite3.Row
+    # Hardening (set on every connection):
+    #  - busy_timeout: wait for a concurrent writer (TUI + CLI/web on the
+    #    same DB) instead of failing with "database is locked" — the freeze
+    #    noted in db_delete_session below;
+    #  - foreign_keys: sqlite defaults FKs OFF, so the declared
+    #    ON DELETE CASCADE on messages(session_id) was inert;
+    #  - WAL: readers don't block the writer (and vice versa). It persists
+    #    in the DB file — a plain sqlite build reads it back fine, so no
+    #    migration. Guarded: on a filesystem without shared-memory support
+    #    the pragma can fail; delete-journal mode still works.
+    c.execute("PRAGMA busy_timeout=5000")
+    c.execute("PRAGMA foreign_keys=ON")
+    try:
+        c.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.DatabaseError:
+        pass
     return c
 
 

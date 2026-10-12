@@ -13,10 +13,11 @@ Shape on disk:
                   "hits": 0}, ...],
      "next_id": 2}
 """
-import json, os, threading, time, re
+import json, threading, time, re
 from typing import List, Dict
 
-from ..constants import LESSONS_FILE, CONFIG_DIR, FILE_PERMISSION
+from ..constants import LESSONS_FILE, CONFIG_DIR
+from ..utils.io import _atomic_write, _quarantine_corrupt
 
 # Thread-level lock to prevent concurrent read/write races on the JSON file
 # when tool calls execute in parallel via ThreadPoolExecutor.
@@ -26,23 +27,39 @@ MAX_INJECT = 8          # how many lessons to show in system prompt at most
 MAX_STORE = 200         # cap total entries; oldest low-hit pruned beyond this
 
 
+def _empty() -> Dict:
+    return {"lessons": [], "next_id": 1}
+
+
 def _load() -> Dict:
     if not LESSONS_FILE.exists():
-        return {"lessons": [], "next_id": 1}
+        return _empty()
     try:
-        data = json.loads(LESSONS_FILE.read_text())
-        data.setdefault("lessons", [])
-        data.setdefault("next_id", 1)
-        return data
-    except (json.JSONDecodeError, OSError):
-        return {"lessons": [], "next_id": 1}
+        raw = LESSONS_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return _empty()          # unreadable — leave the file alone, non-fatal
+    except UnicodeDecodeError:
+        raw = None               # binary garbage — corrupt, quarantine below
+    if raw is None:
+        _quarantine_corrupt(LESSONS_FILE)
+        return _empty()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = None              # corrupt — quarantine below so it isn't erased
+    if not isinstance(data, dict):
+        _quarantine_corrupt(LESSONS_FILE)
+        return _empty()
+    data.setdefault("lessons", [])
+    data.setdefault("next_id", 1)
+    return data
 
 
 def _save(data: Dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    LESSONS_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False))
-    try: os.chmod(LESSONS_FILE, FILE_PERMISSION)
-    except OSError: pass
+    # Atomic: a crash mid-write can never truncate the store, and the file
+    # is 0600 from its first byte (utils/io._atomic_write).
+    _atomic_write(LESSONS_FILE, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def _prune(data: Dict) -> None:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import email.message
+import socket
 import stat
 import time
 
@@ -130,10 +131,27 @@ def _handler(client_ip: str, headers: dict[str, str], public_host: str = ""):
         ("127.0.0.1", {"Host": "x.trycloudflare.com"}, "", False),
         ("127.0.0.1", {"Host": "my.custom.domain"}, "my.custom.domain", False),
         ("8.8.8.8", {"Host": "203.0.113.5:8765"}, "", False),               # public internet
+        # DNS rebinding: a hostname the attacker controls never gets the token —
+        # the browser follows the 302 same-origin and would read it from the URL.
+        ("127.0.0.1", {"Host": "rebind.attacker.example:8765"}, "", False),
+        # Cross-site script-driven requests are refused even with a valid Host …
+        ("192.168.0.20", {"Host": "192.168.0.105:8765", "Sec-Fetch-Site": "cross-site"}, "", False),
+        ("192.168.0.20", {"Host": "192.168.0.105:8765", "Sec-Fetch-Site": "same-origin"}, "", False),
+        ("192.168.0.20", {"Host": "192.168.0.105:8765", "Origin": "http://evil.example"}, "", False),
+        ("127.0.0.1", {"Host": "127.0.0.1:8765", "Origin": "null"}, "", False),
+        # … but a top-level navigation (marked "none", or Origin matching the Host) is.
+        ("192.168.0.20", {"Host": "192.168.0.105:8765", "Sec-Fetch-Site": "none"}, "", True),
+        ("192.168.0.20", {"Host": "192.168.0.105:8765", "Origin": "http://192.168.0.105:8765"}, "", True),
     ],
 )
 def test_token_is_only_handed_out_on_the_local_network(ip, headers, public_host, expected):
     assert _handler(ip, headers, public_host)._may_hand_out_token() is expected
+
+
+def test_token_handout_accepts_this_machines_own_hostname():
+    """Visiting http://<my-hostname>:<port>/ from the terminal still works."""
+    h = _handler("127.0.0.1", {"Host": f"{socket.gethostname()}:8765"})
+    assert h._may_hand_out_token() is True
 
 
 def test_cloudflare_waits_for_dns_before_going_live(fake_cloudflared, monkeypatch):

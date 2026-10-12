@@ -8,7 +8,14 @@ from arkad.constants import set_cwd
 
 class PromptAttachmentTests(unittest.TestCase):
     def setUp(self):
+        from arkad import constants
+        self._orig_cwd = constants.CWD
         prompt_attachments.reset_registry()
+
+    def tearDown(self):
+        # Restore the global CWD: a deleted temp dir left behind breaks every
+        # later test that spawns processes in CWD.
+        set_cwd(self._orig_cwd)
 
     def test_classify_attachment(self):
         self.assertEqual(prompt_attachments.classify_attachment(Path("a.png")), "image")

@@ -44,6 +44,7 @@ from .config import (
 from .registry import needs_auth
 from .registry import mcp_registry
 from .sources import SOURCE_LABELS, format_endpoint
+from .trust import pending_trust as project_pending_trust
 
 SCOPES = ("project", "global")
 _LAUNCHERS = {
@@ -906,6 +907,10 @@ def describe_servers(query: str = "") -> dict[str, Any]:
     names = sorted(servers_cfg)
     q = (query or "").strip().lower()
     auto = set(config.get_auto_connect())
+    # Project servers the user hasn't ok'd yet — skipped at startup, pending approval.
+    pending = set(project_pending_trust(config, servers_cfg)) | {
+        n for n in mcp_registry.untrusted_servers() if n in servers_cfg
+    }
     rows: list[dict[str, Any]] = []
     for name in names:
         cfg = servers_cfg[name] or {}
@@ -926,6 +931,7 @@ def describe_servers(query: str = "") -> dict[str, Any]:
             "also_labels": [SOURCE_LABELS.get(s, s) for s in config.get_also(name)],
             "removable": source in ("project", "arkad"),
             "auto_connect": name in auto,
+            "trusted": name not in pending,
             "transport": (state_obj.transport if state_obj and state_obj.transport else transport),
             "remote": remote,
             "endpoint": format_endpoint(cfg, max_len=200),
@@ -946,6 +952,7 @@ def describe_servers(query: str = "") -> dict[str, Any]:
         "global_config_path": str(scope_path("global")),
         "project_config_exists": scope_path("project").exists(),
         "pending_auth": auth_coordinator.pending(),
+        "pending_trust": sorted(pending),
         "catalog": describe_market(),
         "categories": catalog.CATEGORIES,
     }

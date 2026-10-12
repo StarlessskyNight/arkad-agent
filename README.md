@@ -111,8 +111,17 @@ assets/                Logos + social preview
 | `ARKAD_PROVIDER` | *(auto)* | Force provider: `anthropic`, `openrouter`, `opencode`, `opencode_zen`, `openai_codex` |
 | `CLAUDE_MODEL` | *(unset)* | Override model id at startup |
 | `ARKAD_MAX_PARALLEL_TOOLS` | `64` | Cap on parallel tool calls |
+| `ARKAD_MAX_ITERATIONS` | `50` | Max model→tool iterations in one turn (runaway guard) |
 | `ARKAD_HTTP_READ_TIMEOUT` | 240–600s | Max seconds between bytes on a streaming response |
 | `ARKAD_HTTP_CONNECT_TIMEOUT` | `30` | Connection timeout in seconds |
+| `ARKAD_WEB_HOST` | `127.0.0.1` | Bind address for `--web`. Set `0.0.0.0` for LAN/phone access — any device on the network then receives the auth token automatically on first visit, so only use it on a network you trust |
+
+## Security notes
+
+- **Project MCP servers**: a repo's `.mcp.json` can run commands at startup. Arkad only auto-connects project servers you have approved before (stored in `~/.config/arkad-agent/mcp_trust.json`, keyed by project + command hash). New project servers are skipped at startup and listed by `mcp_list` as untrusted — approve them explicitly with `mcp_connect` or `/mcp connect`.
+- **Shell approval**: read-only commands auto-approve only when the whole command is free of shell operators (`;`, `&&`, `|`, redirects, substitution). Anything chained or redirected asks you first.
+- **Web remote**: binds loopback by default; the token is only handed to a direct visit from this machine (checked via `Host`, `Sec-Fetch-Site`, `Origin`).
+- **Context overflow**: if a provider rejects a request as too long, Arkad trims history aggressively and retries once before giving up with an actionable error.
 
 ## Development
 

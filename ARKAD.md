@@ -15,7 +15,7 @@ python agent.py
 python agent.py --legacy
 ```
 
-Dependencies: `pip install -r requirements.txt` (anthropic, rich, textual — Python 3.10+)
+Dependencies: `pip install -r requirements.txt` (anthropic, openai, httpx, rich, textual, pypdf, openpyxl, mcp, qrcode, pillow — Python 3.10+). For development (test runner), use `pip install -e ".[dev]"` from a checkout.
 
 ## Environment Variables
 
@@ -44,13 +44,13 @@ Dependencies: `pip install -r requirements.txt` (anthropic, rich, textual — Py
 | `commands/` | Slash command handlers dispatched from `dispatch.py` |
 | `storage/` | SQLite session history (`sessions.py`), user memory (`memory.py`), skills (`skills.py`), prefs (`prefs.py`) |
 | `state.py` | **Module-level mutable globals** shared across the package (client, messages, model, flags) — mutate via `arkad.state.<name> = ...` |
-| `constants/` | Paths (`~/.config/claude-agent/`), model names, OAuth endpoints, system prompt, provider identifiers |
+| `constants/` | Paths (`~/.config/arkad-agent/`), model names, OAuth endpoints, system prompt, provider identifiers |
 
 ### Key data flows
 
 - **Tool routing**: Each API call goes through `tools/router.py:select_tools()`, which regex-scans the last 4 messages and keeps any tool groups already active in the tool-call loop.
 - **Conversation state**: All messages live in `state.messages` (plain dicts). The tool-call loop in `main.py:_send_and_loop()` / `tui/app.py` continues until `stop_reason == "end_turn"`.
-- **Persistence**: Sessions stored in SQLite at `~/.config/claude-agent/sessions.db`. Pinned context from `~/.config/claude-agent/pin`. Aliases from `~/.config/claude-agent/aliases.json`.
+- **Persistence**: Sessions stored in SQLite at `~/.config/arkad-agent/sessions.db`. Pinned context from `~/.config/arkad-agent/pin`. Aliases from `~/.config/arkad-agent/aliases.json`.
 - **Auth**: `auth/client.py:make_client()` checks for `ANTHROPIC_API_KEY`, then stored key/OAuth tokens, then prompts interactively. Sets `state.provider` and `state.auth_mode`.
 
 ### Adding a new tool

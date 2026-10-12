@@ -702,6 +702,8 @@ def _start_codex_listener(flow: OAuthFlow, run_action: Callable) -> None:
     except CodexOAuthCallbackError:
         return  # Codex CLI (or the terminal dialog) holds it — pasting still works
 
+    bound = threading.Event()
+
     def listen() -> None:
         try:
             code, _state = wait_for_codex_oauth_callback(
@@ -709,6 +711,9 @@ def _start_codex_listener(flow: OAuthFlow, run_action: Callable) -> None:
                 port=CODEX_OAUTH_CALLBACK_PORT,
                 timeout=FLOW_TTL,
                 stop=flow.stop,
+                # Announce "listening" only once the socket is actually bound —
+                # setting it earlier races the bind and shows a dead port.
+                on_ready=lambda _uri: (setattr(flow, "listening", True), bound.set()),
             )
         except (CodexOAuthCallbackError, OSError) as exc:
             flow.listening = False
@@ -718,9 +723,13 @@ def _start_codex_listener(flow: OAuthFlow, run_action: Callable) -> None:
         flow.listening = False
         _complete(flow, code, run_action)
 
-    flow.listening = True
     flow.thread = threading.Thread(target=listen, daemon=True, name="arkad-web-codex-login")
     flow.thread.start()
+    # start_oauth returns a "listening" flag callers rely on synchronously, so
+    # wait (bounded) for the bind to complete or fail before returning.
+    deadline = time.monotonic() + 2.0
+    while not bound.is_set() and flow.status == "waiting" and time.monotonic() < deadline:
+        bound.wait(0.05)
 
 
 def _codex_callback_error(msg: str) -> str:

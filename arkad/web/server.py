@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import errno
+import ipaddress
 import os
 import socket
 import threading
@@ -45,7 +46,16 @@ def resolve_web_port(host: str, preferred: int, *, max_tries: int = 20) -> int:
     raise OSError(errno.EADDRINUSE, detail)
 
 
-def _local_urls(port: int, token: str) -> list[str]:
+def _is_loopback_bind(host: str) -> bool:
+    if host.strip().lower() in ("localhost", "localhost.localdomain"):
+        return True
+    try:
+        return ipaddress.ip_address(host.split("%")[0]).is_loopback
+    except ValueError:
+        return False
+
+
+def _local_urls(port: int, token: str, host: str = "0.0.0.0") -> list[str]:
     urls: list[str] = []
     seen: set[str] = set()
 
@@ -55,8 +65,16 @@ def _local_urls(port: int, token: str) -> list[str]:
             seen.add(url)
             urls.append(url)
 
+    if _is_loopback_bind(host):
+        # Loopback-only bind: a LAN address would be a dead link in the QR.
+        add(f"[{host}]" if ":" in host else host)
+        add("127.0.0.1")
+        add("localhost")
+        return urls
     add("127.0.0.1")
     add("localhost")
+    if host and host not in ("0.0.0.0", "::"):
+        add(host)
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.connect(("8.8.8.8", 80))
@@ -76,8 +94,10 @@ def start_web_server(
     bridge: WebBridge,
     app: ArkadTUI,
     port: int,
-    host: str = "0.0.0.0",
+    host: str | None = None,
 ) -> tuple[_ArkadHTTPServer, list[str], int]:
+    if host is None:
+        host = default_web_host()
     handler = type(
         "ArkadWebHandler",
         (WebHandler,),
@@ -114,7 +134,7 @@ def start_web_server(
     from .. import media
 
     media.prune_in_background()
-    urls = _local_urls(bound_port, bridge.token)
+    urls = _local_urls(bound_port, bridge.token, host)
     return server, urls, bound_port
 
 
@@ -153,6 +173,17 @@ def default_web_port() -> int:
         return int(raw)
     except ValueError:
         return 8765
+
+
+def default_web_host() -> str:
+    """Bind address for the web remote: loopback-only unless told otherwise.
+
+    ``ARKAD_WEB_HOST=0.0.0.0`` re-enables phone/LAN access — a private-IP
+    client then receives the token automatically on ``GET /`` (see
+    ``handler._may_hand_out_token``), so only do that on a network you trust.
+    """
+    raw = os.environ.get("ARKAD_WEB_HOST", "").strip()
+    return raw or "127.0.0.1"
 
 
 def web_enabled_from_env() -> bool:

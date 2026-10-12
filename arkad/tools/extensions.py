@@ -22,6 +22,7 @@ from typing import Any
 
 from ..console import console
 from ..mcp import install as mcp_install
+from ..mcp import trust as mcp_trust
 from ..mcp.auth import coordinator as auth_coordinator
 from ..mcp.registry import mcp_registry
 from ..storage import skill_install as skills_install
@@ -187,6 +188,12 @@ def mcp_list() -> str:
             lines.append(f"      needs: {', '.join(s['needs_credentials'])}")
     if data["pending_auth"]:
         lines.append("Waiting for the user to sign in: " + ", ".join(p["name"] for p in data["pending_auth"]))
+    if data.get("pending_trust"):
+        lines.append(
+            "Untrusted project servers (from this repo's .mcp.json — skipped at startup). "
+            "Ask the user, then mcp_connect(name) to approve; the approval is remembered: "
+            + ", ".join(data["pending_trust"])
+        )
     return "\n".join(lines)
 
 
@@ -200,7 +207,8 @@ def mcp_remove(name: str, scope: str | None = None) -> str:
 def mcp_connect(name: str, action: str = "connect") -> str:
     """Connect / reconnect / disconnect a configured server, or start its sign-in again."""
     act = (action or "connect").strip().lower()
-    cfg = mcp_install.get_config().get_server(name)
+    config = mcp_install.get_config()
+    cfg = config.get_server(name)
     if cfg is None:
         return f"ERROR: no MCP server named '{name}' in the current scope. mcp_list shows what's there."
     if act == "disconnect":
@@ -213,6 +221,14 @@ def mcp_connect(name: str, action: str = "connect") -> str:
         mcp_registry.disconnect(name)
     if act not in ("connect", "reconnect", "authenticate", "auth", "signin", "sign_in"):
         return "ERROR: action must be connect, reconnect, disconnect, authenticate or signout."
+    if mcp_trust.requires_trust(config, name, cfg):
+        # A project .mcp.json came with the repo: running it is the user's call,
+        # not the model's. Same approval mcp_add uses; approval is remembered.
+        what = f"connects to: {cfg.get('url')}" if cfg.get("url") else f"runs: {mcp_install.command_line(cfg)}"
+        if not _approve(f"connect untrusted project MCP server '{name}' ({what})"):
+            return "USER DENIED — the server stays untrusted."
+        mcp_trust.grant(mcp_trust.project_root(config), name, cfg)
+        mcp_registry.clear_untrusted(name)
 
     from ..mcp import secrets as mcp_secrets
 

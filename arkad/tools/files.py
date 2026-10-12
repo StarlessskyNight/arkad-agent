@@ -1,5 +1,7 @@
 """File tools: read_file, write_file, edit_file."""
+import os
 import pathlib
+import tempfile
 import threading
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -94,14 +96,50 @@ def _save_backup(p: pathlib.Path):
     try:
         if p.stat().st_size > _BACKUP_MAX_BYTES:
             return
-        state.backups.append((str(p), p.read_text(errors="ignore")))
-    except OSError:
+        # Strict read: a lossy backup would corrupt the file on restore.
+        state.backups.append((str(p), p.read_text(encoding="utf-8")))
+    except (OSError, UnicodeDecodeError):
         pass
 
 
+def _atomic_write(p: pathlib.Path, text: str) -> None:
+    """Write via temp file + os.replace so a crash mid-write can never
+    truncate the original. Existing file mode is preserved; the text is
+    encoded before any file is touched so bad content fails cleanly."""
+    data = text.encode("utf-8")  # raises UnicodeEncodeError before any file changes
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            mode = p.stat().st_mode & 0o777
+        except OSError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(tmp, mode)
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _in_skip_dir(p: pathlib.Path) -> str | None:
-    """Return the offending skip-dir name if p is inside one, else None."""
-    for part in p.parts:
+    """Return the offending skip-dir name if p is inside one, else None.
+
+    Only the part of the path under the project root counts: a project
+    checked out under ``~/build/...`` must stay readable.
+    """
+    try:
+        parts = p.resolve().relative_to(CWD.resolve()).parts
+    except ValueError:
+        parts = p.parts
+    for part in parts:
         if part in SKIP_DIRS:
             return part
     return None
@@ -128,7 +166,9 @@ def _read_lines_slice(p: pathlib.Path, offset: int, limit: int) -> str:
     """Read only the requested line range — avoids loading huge files whole."""
     end = offset + limit if limit else None
     out: list[str] = []
-    with p.open("r", encoding="utf-8", errors="ignore") as fh:
+    # "replace": paging a mostly-text file with a few bad bytes shows visible
+    # markers instead of silently dropping them (edits use a strict read).
+    with p.open("r", encoding="utf-8", errors="replace") as fh:
         for i, line in enumerate(fh):
             if i < offset:
                 continue
@@ -192,7 +232,14 @@ def read_file(path: str, offset: int = 0, limit: int = 0, force: bool = False) -
         if cached is not None:
             return cached[:MAX_FILE_READ]
 
-        txt = p.read_text(errors="ignore")
+        try:
+            txt = p.read_text(encoding="utf-8", errors="replace" if force else "strict")
+        except UnicodeDecodeError:
+            return (
+                f"ERROR: '{path}' is not valid UTF-8 text. Use read_document for "
+                f"PDFs, images, CSV, Excel, JSON, etc., or pass force=true to view "
+                f"it with replacement characters."
+            )
         _cache_put(p, txt)
         return txt[:MAX_FILE_READ]
 
@@ -205,10 +252,15 @@ def write_file(path: str, content: str, allow_outside_project: bool = False) -> 
             return scope_err
     with _path_lock(p):
         existed = p.exists()
-        before = p.read_text(errors="ignore") if existed else ""
+        before = p.read_text(encoding="utf-8", errors="replace") if existed else ""
         _save_backup(p)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
+        try:
+            _atomic_write(p, content)
+        except UnicodeEncodeError:
+            return f"ERROR: cannot write {path} — content is not encodable as UTF-8 (file unchanged)"
+        except OSError as e:
+            return f"ERROR: cannot write {path} — {e} (file unchanged)"
         _cache_invalidate(p)
     _emit_diff(str(p), before, content, action="write" if existed else "create")
     return f"WROTE {p} ({len(content)} bytes)"
@@ -339,12 +391,24 @@ def edit_file(
     with _path_lock(p):
         if not p.exists():
             return f"ERROR: {path} not found"
-        txt = p.read_text(errors="ignore")
+        try:
+            txt = p.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return (
+                f"ERROR: {path} is not valid UTF-8 text — refusing to edit it "
+                f"(a lossy round-trip would corrupt the file). Use read_document "
+                f"for binary/data files."
+            )
         new_txt, err, n, note = _apply_text_edit(txt, old_str, new_str, replace_all)
         if err:
             return f"ERROR: {err}"
         _save_backup(p)
-        p.write_text(new_txt)
+        try:
+            _atomic_write(p, new_txt)
+        except UnicodeEncodeError:
+            return f"ERROR: cannot write {path} — replacement text is not valid UTF-8 (file unchanged)"
+        except OSError as e:
+            return f"ERROR: cannot write {path} — {e} (file unchanged)"
         _cache_invalidate(p)
     _emit_diff(str(p), txt, new_txt, action="edit")
     msg = f"EDITED {p} ({n} replacement{'s' if n > 1 else ''})"
@@ -415,16 +479,28 @@ def multi_edit(
                 i = j
                 continue
 
-            txt = p.read_text(errors="ignore")
+            try:
+                txt = p.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                for k, _ in enumerate(block):
+                    fail += 1
+                    lines.append(
+                        f"{i + k + 1}/{len(edits)} ERROR {path}: not valid UTF-8 — "
+                        f"refusing to edit (would corrupt the file)"
+                    )
+                i = j
+                continue
             before_txt = txt
             backed_up = False
+            block_ok = 0
+            block_lines: list[str] = []
             for k, edit in enumerate(block):
                 idx = i + k + 1
                 old_str = edit.get("old_str")
                 new_str = edit.get("new_str")
                 if old_str is None or new_str is None:
                     fail += 1
-                    lines.append(f"{idx}/{len(edits)} ERROR {path}: old_str and new_str are required")
+                    block_lines.append(f"{idx}/{len(edits)} ERROR {path}: old_str and new_str are required")
                     continue
 
                 new_txt, err, n, note = _apply_text_edit(
@@ -435,22 +511,32 @@ def multi_edit(
                 )
                 if err:
                     fail += 1
-                    lines.append(f"{idx}/{len(edits)} ERROR {path}: {err}")
+                    block_lines.append(f"{idx}/{len(edits)} ERROR {path}: {err}")
                     continue
 
                 if not backed_up:
                     _save_backup(p)
                     backed_up = True
                 txt = new_txt
-                ok += 1
-                lines.append(
+                block_ok += 1
+                block_lines.append(
                     f"{idx}/{len(edits)} EDITED {path} ({n} replacement{'s' if n > 1 else ''})"
                     + (f" [{note}]" if note else "")
                 )
 
             if backed_up:
-                p.write_text(txt)
-                _cache_invalidate(p)
+                try:
+                    _atomic_write(p, txt)
+                except (UnicodeEncodeError, OSError) as e:
+                    # Computed edits were not written: report the file untouched.
+                    fail += block_ok
+                    lines.append(f"ERROR writing {path}: {e} (file unchanged)")
+                else:
+                    ok += block_ok
+                    _cache_invalidate(p)
+                    lines.extend(block_lines)
+            else:
+                lines.extend(block_lines)
 
         if backed_up:
             _emit_diff(str(p), before_txt, txt, action="edit")

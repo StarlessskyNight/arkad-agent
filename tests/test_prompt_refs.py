@@ -7,6 +7,15 @@ from arkad.constants import set_cwd
 
 
 class PromptRefsTests(unittest.TestCase):
+    def setUp(self):
+        from arkad import constants
+        self._orig_cwd = constants.CWD
+
+    def tearDown(self):
+        # Restore the global CWD: a deleted temp dir left behind breaks every
+        # later test that spawns processes in CWD.
+        set_cwd(self._orig_cwd)
+
     def test_extract_file_refs(self):
         text = "Fix @README.md and @arkad/tui/app.py please"
         self.assertEqual(

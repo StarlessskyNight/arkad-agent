@@ -2,11 +2,20 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from arkad import constants
 from arkad.path_resolve import robust_resolve
 from arkad.constants import set_cwd
 
 
 class PathResolveTests(unittest.TestCase):
+    def setUp(self):
+        self._orig_cwd = constants.CWD
+
+    def tearDown(self):
+        # Restore the global CWD: leaving it pointing at a deleted temp dir
+        # breaks every later test that spawns processes in CWD.
+        set_cwd(self._orig_cwd)
+
     def test_loose_match_missing_space_before_pm(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

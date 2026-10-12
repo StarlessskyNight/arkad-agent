@@ -43,7 +43,8 @@ from .. import state
 from .system import build_system
 from ..media import materialize_uploads
 from .trim import (
-    _content_chars, _total_chars, anthropic_wire_messages, prune_tool_images, trim_messages,
+    _content_chars, _total_chars, anthropic_wire_messages, force_trim_messages,
+    prune_tool_images, trim_messages,
 )
 from .render import assistant_model_label
 from .stream_display import RichAssistantStreamDisplay
@@ -53,6 +54,53 @@ from .turn_progress import report_turn_phase
 # Reference to the active stream context so another thread (e.g. the TUI Esc
 # handler) can abort an in-flight response.
 _current_stream = None
+
+# One aggressive-trim recovery per turn (reset at the top of every turn).
+_context_recovered = False
+
+# ── Context-overflow recovery ─────────────────────────────────────────────
+# Provider messages that mean "your history no longer fits the window".
+# Matched case-insensitively against the error string; status must be 400/413.
+_CONTEXT_LENGTH_PATTERNS = (
+    "prompt is too long",
+    "context_length_exceeded",
+    "context length exceeded",
+    "maximum context length",
+    "maximum number of tokens",
+    "reduce the length",
+    "input length and `max_tokens`",
+    "exceeds the maximum context",
+    "request too large",
+)
+
+
+def _is_context_length_error(e) -> bool:
+    """True when an SDK status error is a context-window overflow (not a
+    bad parameter, auth failure, or version complaint)."""
+    status = getattr(e, "status_code", None)
+    if status not in (400, 413):
+        return False
+    text = str(e).lower()
+    return any(p in text for p in _CONTEXT_LENGTH_PATTERNS)
+
+
+def _recover_from_context_overflow() -> bool:
+    """Trim history aggressively and retry the request once per turn.
+
+    Returns True when the caller should retry, False when recovery already
+    happened this turn (the caller must surface the error instead)."""
+    global _context_recovered
+    if _context_recovered:
+        return False
+    _context_recovered = True
+    console.print(
+        "[yellow]context window exceeded — trimming history and retrying once…[/]"
+    )
+    force_trim_messages()
+    # Re-pair tool_use/tool_result after the mutation — strict providers
+    # (DeepSeek, OpenAI) reject unpaired calls.
+    _heal_message_history()
+    return True
 _worker_thread_id: int = 0  # set at the start of each turn
 # Set True once the current attempt receives its first delta. Lets the timeout
 # handler tell a "no first token" stall (safe to retry on a fresh connection)
@@ -663,8 +711,9 @@ def _call_claude_stream():
         # OpenCode (DeepSeek, etc.) needs explicit {"type": "disabled"} to turn off thinking
         kwargs["thinking"] = {"type": "disabled"}
 
-    global _current_stream, _worker_thread_id
+    global _current_stream, _worker_thread_id, _context_recovered
     _worker_thread_id = threading.current_thread().ident or 0
+    _context_recovered = False  # one aggressive-trim recovery per turn
     delays = [1, 3, 6]
     oauth_refreshed = False
     claude_version_retried = False
@@ -783,6 +832,13 @@ def _call_claude_stream():
                     )
                     state.client = _build_client_from_mode("oauth", interactive=False)
                     continue
+            if _is_context_length_error(e):
+                if _recover_from_context_overflow():
+                    continue
+                raise ArkadAPIError(
+                    "context window exceeded even after trimming — "
+                    "start a new session (/new) or use /trim"
+                )
             if e.status_code == 402:
                 console.print(
                     f"[red]Payment required — Provider: {state.provider}[/]\n"
@@ -906,4 +962,11 @@ def _call_claude_stream():
                 report_turn_phase(f"Server {code} — retrying soon…")
                 console.print(f"[yellow]server {code}, retry...[/]")
                 time.sleep(delays[attempt]); continue
+            if _is_context_length_error(e):
+                if _recover_from_context_overflow():
+                    continue
+                raise ArkadAPIError(
+                    "context window exceeded even after trimming — "
+                    "start a new session (/new) or use /trim"
+                )
             raise

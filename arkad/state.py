@@ -148,7 +148,20 @@ global_mcp: bool = False            # if True, include MCP servers from global c
                                     # only project .mcp.json is loaded.
 
 # user context
-pinned_context: str = PIN_FILE.read_text() if PIN_FILE.exists() else ""
+def _read_pin_file() -> str:
+    """Import-time read of the pinned-context file.
+
+    Guarded like the other import-time loaders below: a permission error,
+    a directory in place of the file, or bad bytes must not crash every
+    import of this module — the pin is simply treated as empty.
+    """
+    try:
+        return PIN_FILE.read_text() if PIN_FILE.exists() else ""
+    except Exception:
+        return ""
+
+
+pinned_context: str = _read_pin_file()
 pin_enabled: bool = True          # inject pinned_context into system prompt when True
 aliases: Dict[str, str] = (
     json.loads(ALIAS_FILE.read_text()) if ALIAS_FILE.exists() else {}

@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from .config import reload_config
 from .registry import mcp_registry
+from .trust import requires_trust
 
 
 def apply_mcp_scope_change(
@@ -38,6 +39,14 @@ def apply_mcp_scope_change(
             continue
         cfg = config.get_server(name)
         if cfg is None:
+            continue
+        if requires_trust(config, name, cfg):
+            # Switching a scope on is not consent for a repo's commands — an
+            # untrusted project server stays skipped until it's approved.
+            mcp_registry.note_untrusted(name)
+            failed.append((name, "untrusted project server — approve it in /mcp first"))
+            if on_connect_done:
+                on_connect_done(name, failed[-1][1])
             continue
         if on_connect_start:
             on_connect_start(name)

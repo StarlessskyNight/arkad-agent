@@ -805,7 +805,11 @@ class _OpenCodeMessages:
                 response = self._client.responses.create(**payload)
             except Exception as e:
                 err = str(e).lower()
-                if resp_tools and ("tool" in err or "function" in err):
+                # Model doesn't support tools — retry without them, but never
+                # on the free tier: without its bash/read gate tools the
+                # gateway 403s FreeTierError, masking the real error (same
+                # guard as the chat branch below).
+                if resp_tools and not owner.gate_tools and ("tool" in err or "function" in err):
                     payload.pop("tools", None)
                     response = self._client.responses.create(**payload)
                 else:

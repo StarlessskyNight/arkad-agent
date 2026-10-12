@@ -278,19 +278,10 @@ def test_thinking_reaches_web_once(monkeypatch):
 
 
 def test_server_accepts_a_burst_of_module_requests():
-    """The page fetches ~20 ES modules at once; a backlog of 5 (socketserver's
-    default) made macOS reset the rest and the app never booted."""
-    from arkad.web.server import _ArkadHTTPServer
-
-    assert _ArkadHTTPServer.request_queue_size >= 64
-    modules = len(list((STATIC / "js").glob("*.js")))
-    assert _ArkadHTTPServer.request_queue_size > modules + 4
-
-
-def test_server_accepts_a_burst_of_module_requests():
     """The page fetches ~20 ES modules at once; socketserver's default backlog
     of 5 made macOS reset the rest (ERR_CONNECTION_RESET) and the app never booted."""
     from arkad.web.server import _ArkadHTTPServer
 
+    assert _ArkadHTTPServer.request_queue_size >= 64
     modules = len(list((STATIC / "js").glob("*.js")))
     assert _ArkadHTTPServer.request_queue_size > modules + 4

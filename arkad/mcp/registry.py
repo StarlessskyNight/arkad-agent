@@ -7,6 +7,7 @@ dedicated background thread with a persistent asyncio event loop.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import concurrent.futures
 import contextlib
 import logging
@@ -43,11 +44,31 @@ def encode_tool_name(server_name: str, tool_name: str) -> str:
 
 
 def decode_tool_name(arkad_tool_name: str) -> tuple[str, str] | None:
-    """Extract (server_name, tool_name) from namespaced Arkad tool name."""
+    """Extract (server_name, tool_name) from namespaced Arkad tool name.
+
+    Encoded names are ambiguous when a server name itself contains ``__``
+    (``mcp__foo__bar__baz``), so the split is resolved against the servers
+    registered right now — the longest known server name wins. Unknown names
+    fall back to the old greedy split.
+    """
+    if arkad_tool_name.startswith(_MCP_TOOL_PREFIX):
+        rest = arkad_tool_name[len(_MCP_TOOL_PREFIX):]
+        for name in _known_server_names():
+            if rest.startswith(name + "__") and len(rest) > len(name) + 2:
+                return name, rest[len(name) + 2:]
     m = _MCP_TOOL_RE.match(arkad_tool_name)
     if m:
         return m.group(1), m.group(2)
     return None
+
+
+def _known_server_names() -> list[str]:
+    """Registered server names, longest first (unambiguous decoding order)."""
+    try:
+        names = list(mcp_registry._servers)
+    except Exception:  # pragma: no cover — registry not built yet
+        return []
+    return sorted(names, key=len, reverse=True)
 
 
 def is_mcp_tool(arkad_tool_name: str) -> bool:
@@ -176,21 +197,34 @@ class _MCPEventLoop:
         self.loop.run_forever()
 
     def run_coro(self, coro, timeout: float = 60) -> Any:
-        """Schedule a coroutine on the event loop and return result synchronously."""
+        """Schedule a coroutine on the event loop and return result synchronously.
+
+        On timeout the coroutine is cancelled rather than left running on the
+        loop (a leaked call keeps the session busy and the server waiting).
+        """
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        return future.result(timeout=timeout)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise
 
     def run_and_forget(self, coro) -> asyncio.Task:
         """Schedule a fire-and-forget coroutine (returns the Task)."""
         return asyncio.run_coroutine_threadsafe(coro, self.loop)
 
     def stop(self) -> None:
-        self.loop.call_soon_threadsafe(self.loop.stop)
-        self.thread.join(timeout=5)
+        try:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+        except Exception:
+            pass  # loop already closed / never started
+        if self.thread.is_alive():
+            self.thread.join(timeout=5)
 
 
 _loop: _MCPEventLoop | None = None
 _lock = threading.Lock()
+_atexit_installed = False
 
 
 def _get_loop() -> _MCPEventLoop:
@@ -199,7 +233,37 @@ def _get_loop() -> _MCPEventLoop:
         with _lock:
             if _loop is None:
                 _loop = _MCPEventLoop()
+    _install_atexit_teardown()
     return _loop
+
+
+def _install_atexit_teardown() -> None:
+    """Register process-exit cleanup once, where the registry/loop is born
+    (not in main.py or a UI — every embedding gets it for free)."""
+    global _atexit_installed
+    with _lock:
+        if _atexit_installed:
+            return
+        _atexit_installed = True
+    atexit.register(_teardown_at_exit)
+
+
+def _teardown_at_exit() -> None:
+    """atexit hook, also safe to call directly and repeatedly: disconnect every
+    server (stdio children see EOF instead of being orphaned) and stop the
+    event-loop thread."""
+    global _loop
+    try:
+        mcp_registry.disconnect_all()
+    except Exception:
+        logger.debug("mcp shutdown: disconnect_all failed", exc_info=True)
+    with _lock:
+        loop_obj, _loop = _loop, None
+    if loop_obj is not None:
+        try:
+            loop_obj.stop()
+        except Exception:
+            pass
 
 
 # ── tool schema helpers ──────────────────────────────────────────────────
@@ -381,6 +445,7 @@ class MCPRegistry:
         self._pending: dict[str, MCPServerState] = {}  # remote servers still signing in / connecting
         self._needs_auth: set[str] = set()  # a quiet connect found the server wants a sign-in
         self._listeners: list[Callable[[str, str], None]] = []
+        self._untrusted: set[str] = set()  # project servers skipped at startup (pending trust)
         self._tls = threading.local()
         self._lock = threading.RLock()
 
@@ -392,6 +457,23 @@ class MCPRegistry:
         self._console_print: Callable | None = None
 
         auth_coordinator.add_listener(self._on_auth_event)
+        _install_atexit_teardown()
+
+    # ── project-server trust (see mcp/trust.py) ──────────────────────────
+
+    def note_untrusted(self, server_name: str) -> None:
+        """Record that startup skipped this project server (pending trust)."""
+        with self._lock:
+            self._untrusted.add(server_name)
+
+    def clear_untrusted(self, server_name: str) -> None:
+        with self._lock:
+            self._untrusted.discard(server_name)
+
+    def untrusted_servers(self) -> list[str]:
+        """Project servers the startup auto-connect skipped until they're trusted."""
+        with self._lock:
+            return sorted(self._untrusted)
 
     # ── change notifications (sidebar, dialogs, web) ─────────────────────
 
@@ -646,6 +728,27 @@ class MCPRegistry:
 
         # Also update TOOL_NAME_TO_GROUP if accessible
         self._rebuild_tool_group()
+        self._grant_project_trust(server_name)
+
+    def _grant_project_trust(self, server_name: str) -> None:
+        """A project server that just connected was consented to somewhere — an
+        approved ``mcp_connect``, ``/mcp connect`` or a UI button (an untrusted
+        one never reaches a successful connect: startup skips it). Remember the
+        approval so startup auto-connects it next time."""
+        try:
+            from . import trust as mcp_trust
+            from .config import get_config
+
+            config = get_config()
+            if not mcp_trust.is_project(config, server_name):
+                return
+            entry = config.get_server(server_name) or {}
+            root = mcp_trust.project_root(config)
+            if not mcp_trust.is_trusted(root, server_name, entry):
+                mcp_trust.grant(root, server_name, entry)
+            self.clear_untrusted(server_name)
+        except Exception:
+            logger.debug("could not record MCP trust for '%s'", server_name, exc_info=True)
 
     def _unregister_tools(self, server_name: str, tools: list[Tool]) -> None:
         """Remove MCP tools from the Arkad tool system."""
@@ -1183,8 +1286,9 @@ class MCPRegistry:
         return None
 
     def disconnect_all(self) -> None:
-        """Disconnect all MCP servers."""
-        names = list(self._servers.keys())
+        """Disconnect all MCP servers — connected and still-connecting alike."""
+        with self._lock:
+            names = list(dict.fromkeys([*self._servers, *self._pending]))
         for name in names:
             self.disconnect(name)
 
@@ -1220,7 +1324,9 @@ class MCPRegistry:
                     rec.last_tool_error = None
                     rec.tool_calls_ok += 1
             return out
-        except TimeoutError:
+        except (TimeoutError, concurrent.futures.TimeoutError):
+            # On 3.11+ these are the same class; on 3.10 Future.result raises
+            # the concurrent one, which would otherwise hit the generic handler.
             elapsed_ms = (time.monotonic() - t0) * 1000
             err = f"ERROR: MCP tool '{server_name}/{tool_name}' timed out (120s)"
             with self._lock:
@@ -1369,6 +1475,7 @@ def auto_connect_servers(
     starts and finishes connecting, so a status view can repaint.
     """
     from .config import get_config
+    from .trust import requires_trust
 
     config = get_config()
     queued = [n for n in config.get_auto_connect() if config.get_server(n) is not None]
@@ -1381,6 +1488,20 @@ def auto_connect_servers(
             if server_cfg is None:
                 if console_print:
                     console_print(f"[yellow]mcp: server '{name}' not found in config, skipping[/]")
+                continue
+            if requires_trust(config, name, server_cfg):
+                # A repo's .mcp.json runs code at startup — only servers the
+                # user trusted before may auto-connect. Skipped, recorded, and
+                # connectable after an approval (see mcp/trust.py).
+                mcp_registry.note_untrusted(name)
+                mcp_registry.set_connecting([name], False)
+                if on_change:
+                    on_change()
+                if console_print:
+                    console_print(
+                        f"[yellow]mcp: project server '{name}' needs trust — skipped at startup; "
+                        "approve it with mcp_connect or /mcp connect[/]"
+                    )
                 continue
             with mcp_registry.startup_connect():
                 error = mcp_registry.connect(name, server_cfg)

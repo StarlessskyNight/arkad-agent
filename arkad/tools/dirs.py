@@ -187,7 +187,13 @@ def _terms(query: str) -> list[str]:
 
 
 def _is_skipped(path: pathlib.Path) -> bool:
-    return any(part in SKIP_DIRS for part in path.parts)
+    # Only the part under the project root counts — a project checked out
+    # under ~/build/... must stay searchable.
+    try:
+        parts = path.resolve().relative_to(CWD.resolve()).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in SKIP_DIRS for part in parts)
 
 
 def _safe_rel(path: pathlib.Path) -> str:

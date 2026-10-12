@@ -7,6 +7,7 @@ import json
 import mimetypes
 import queue
 import re
+import socket
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -85,22 +86,66 @@ class WebHandler(BaseHTTPRequestHandler):
         "X-Real-IP", "Cf-Connecting-Ip", "Cf-Ray", "Cdn-Loop", "Ngrok-Trace-Id",
     )
 
+    def _request_host(self) -> str:
+        """The ``Host`` header without its port (IPv6 literals keep their colons)."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host.startswith("[") and "]" in host:
+            return host[1:host.index("]")]
+        return host.split(":")[0].strip()
+
+    def _host_is_this_machine(self, host: str) -> bool:
+        """True when ``Host`` addresses this computer itself.
+
+        A DNS-rebinding page is served under a hostname the attacker
+        controls, so only ``localhost``, an IP literal, or a name this
+        machine answers to may ever receive the token redirect.
+        """
+        if host == "localhost":
+            return True
+        try:
+            ipaddress.ip_address(host)
+            return True
+        except ValueError:
+            pass
+        try:
+            names = {socket.gethostname().lower()}
+            info = socket.gethostbyname_ex(socket.gethostname())
+            names.add((info[1] or "").lower())
+            names |= {alias.lower() for alias in info[2]}
+        except OSError:
+            names = set()
+        return host in names
+
     def _may_hand_out_token(self) -> bool:
         """Only a direct visit from this computer or the LAN gets the token.
 
         A tunnel (cloudflared / ngrok) connects from 127.0.0.1 too, so the
         client address alone can't tell — proxy headers and the tunnel's
-        public Host can.
+        public Host can. A DNS-rebinding page also connects from 127.0.0.1
+        (the browser never leaves the machine), so the Host must address
+        this machine and the request must be a top-level navigation: a
+        present ``Sec-Fetch-Site`` has to be "none" and a present ``Origin``
+        has to match the Host.
         """
         for name in self._PROXY_HEADERS:
             if self.headers.get(name):
                 return False
-        host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        host = self._request_host()
         public_host = (getattr(self.bridge, "public_host", "") or "").lower()
         if public_host and host == public_host:
             return False
         if host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok.app", ".ngrok.io", ".ngrok.dev")):
             return False
+        if not self._host_is_this_machine(host):
+            return False
+        site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if site and site != "none":
+            return False
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin:
+            origin_host = (urllib.parse.urlparse(origin).hostname or "").lower()
+            if origin_host != host:
+                return False
         try:
             ip = ipaddress.ip_address((self.client_address or ("",))[0])
         except ValueError:
@@ -116,6 +161,10 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         # Assets change with every upgrade and are tiny — always revalidate.
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        # The page never navigates away from here — no URL should leak in a
+        # Referer header (the token lives in query strings).
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
 
@@ -133,12 +182,29 @@ class WebHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
+    # JSON posts carry prompts and settings — both tiny. Anything past this
+    # is a mistake or an attempt to pin a thread on a huge read.
+    _MAX_JSON_BODY = 1 << 20  # 1 MB
+
+    def _read_json(self) -> dict[str, Any] | None:
+        """Parse the request body; ``None`` when it was refused (413 sent)."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0:
+            self._send_json(400, {"ok": False, "code": "bad_length",
+                                  "error": "The request had an invalid size."}, close=True)
+            return None
+        if length > self._MAX_JSON_BODY:
+            # Never read the body: the socket can't be reused anyway.
+            self._send_json(413, {"ok": False, "code": "too_large",
+                                  "error": "The request body is over 1 MB."}, close=True)
+            return None
         raw = self.rfile.read(length) if length else b"{}"
         try:
             data = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {}
         return data if isinstance(data, dict) else {}
 
@@ -758,6 +824,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return
 
         data = self._read_json()
+        if data is None:  # oversized body — the 413 is already sent
+            return
 
         if path.startswith("/api/"):
             self._handle_api_post(path, data)

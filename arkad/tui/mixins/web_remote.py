@@ -89,6 +89,15 @@ class WebRemoteMixin:
                 f"[{ui.WARN}]Port {preferred_port} in use — "
                 f"web remote on [cyan]{bound_port}[/]"
             )
+        bound_host = (self._web_server.server_address or ("",))[0]
+        if bound_host not in ("127.0.0.1", "::1", "localhost"):
+            # Non-loopback bind (ARKAD_WEB_HOST=0.0.0.0 …): anyone on this
+            # network gets the token automatically on GET / — worth saying so.
+            self._tui_console.print(
+                f"[{ui.WARN}]Web remote listens on {bound_host} — any device on "
+                f"this network receives the token automatically. "
+                f"ARKAD_WEB_HOST=127.0.0.1 keeps it to this computer.[/]"
+            )
         self._web_primary_url = primary_remote_url(self._web_urls)
         self._render_web_bar()
         return True

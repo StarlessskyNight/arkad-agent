@@ -28,6 +28,13 @@ dependencies = [
 [tool.setuptools.dynamic]
 version = {attr = "arkad.constants.models.VERSION"}
 
+[project.optional-dependencies]
+# Test runner only: the suite (tests/) imports pytest plus runtime deps
+# already declared above — no pytest plugins are used (subtests are native).
+dev = [
+    "pytest>=8",
+]
+
 [project.scripts]
 arkad-agent = "arkad.cli:main"
 arkad = "arkad.cli:main"

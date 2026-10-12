@@ -101,6 +101,15 @@ class WhitespaceTolerantSpanTests(unittest.TestCase):
 
 
 class EditFileIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        from arkad import constants
+        self._orig_cwd = constants.CWD
+
+    def tearDown(self):
+        # Restore the global CWD: a deleted temp dir left behind breaks every
+        # later test that spawns processes in CWD.
+        set_cwd(self._orig_cwd)
+
     def test_edit_file_reports_fuzzy_note(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

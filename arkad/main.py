@@ -295,6 +295,12 @@ def _send_and_loop(inp: str | list[dict]):
     *inp* may be a plain string (text-only or OCR output) or a list of
     Anthropic-format content blocks (text + native image blocks).
     """
+    # Read at turn start so an env override applies per turn, and a cancel
+    # left over from a previous turn can never abort this one before it
+    # starts — the TUI clears the same flag in _begin_turn.
+    from .constants.models import MAX_TURN_ITERATIONS
+
+    state.cancel_requested.clear()
     user_msg = {"role": "user", "content": inp}
     state.messages.append(user_msg)
     state.web_tool_used_this_turn = False
@@ -306,10 +312,21 @@ def _send_and_loop(inp: str | list[dict]):
             title = inp
         db_set_title_if_empty(state.current_session_id, title)
     empty_retries = 0
+    iterations = 0
     try:
         while True:
             if state.cancel_requested.is_set():
                 raise KeyboardInterrupt()
+            # Runaway guard: the model kept issuing tool calls and never
+            # reached end_turn — stop the turn instead of spinning forever.
+            if iterations >= MAX_TURN_ITERATIONS:
+                console.print(
+                    f"[red]✗ runaway guard: stopped after {MAX_TURN_ITERATIONS} "
+                    "model iterations in one turn[/] "
+                    "[dim](set ARKAD_MAX_ITERATIONS to raise)[/]"
+                )
+                break
+            iterations += 1
             with console.status("[dim]thinking…[/]", spinner="dots"):
                 resp = call_claude_stream()
             # Guard against a turn that produced nothing visible (no text, no
@@ -325,6 +342,10 @@ def _send_and_loop(inp: str | list[dict]):
                 console.print(f"[yellow]{empty_turn_message(resp)}[/]")
                 break
             empty_retries = 0
+            # Cancelled while the reply was finishing: drop it like the TUI
+            # does — a reply that belongs to a cancelled turn never lands.
+            if state.cancel_requested.is_set():
+                raise KeyboardInterrupt()
             asst_msg = {"role": "assistant", "content": resp.content}
             state.messages.append(asst_msg)
             if state.current_session_id:

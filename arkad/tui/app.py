@@ -1644,6 +1644,7 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
             empty_turn_message,
         )
         from ..storage.sessions import db_append_message, db_set_title_if_empty
+        from ..constants.models import MAX_TURN_ITERATIONS
 
         me = threading.get_ident()
         if turn_id is not None:
@@ -1744,9 +1745,22 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
                 db_set_title_if_empty(state.current_session_id, title)
 
             empty_retries = 0
+            iterations = 0
             while True:
                 if stale() or state.turn_cancelled():
                     raise KeyboardInterrupt()
+                # Runaway guard: the model kept issuing tool calls and never
+                # reached end_turn — stop the turn instead of spinning forever.
+                # Breaks cleanly (no KeyboardInterrupt): the assistant replies
+                # already landed, and the finally below still runs _turn_done.
+                if iterations >= MAX_TURN_ITERATIONS:
+                    self._tui_console.print(
+                        f"[{ui.ERR}]✗ runaway guard: stopped after "
+                        f"{MAX_TURN_ITERATIONS} model iterations in one turn[/] "
+                        f"[{ui.FG_DIM}](set ARKAD_MAX_ITERATIONS to raise)[/]"
+                    )
+                    break
+                iterations += 1
                 resp = call_claude_stream()
                 decision = classify_empty_turn(resp, empty_retries)
                 if decision in ("retry", "stop"):

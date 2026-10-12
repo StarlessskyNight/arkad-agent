@@ -3,8 +3,11 @@
 Strategy:
   - Keep the last KEEP_TURNS full user+assistant pairs always intact.
   - For older tool-result messages, replace the content with a short stub.
-  - NEVER stub Connected Context Pack results (they contain ALL the file
-    content the model needs to work with — stubbing breaks the workflow).
+  - Context packs are kept verbatim only within the pack budget (the newest
+    KEEP_PACKS packs plus anything that still fits MAX_PACK_CHARS); older
+    packs collapse to PACK_STUB — a content replacement inside the existing
+    tool_result, so pairing stays intact and the model can re-read the file
+    with read_bundle.
   - Never drop user or assistant text messages — only collapses old tool outputs.
 
 This is a lossy compression: old tool outputs are replaced with a stub.
@@ -13,7 +16,12 @@ assistant request and a stub result, so the flow remains coherent.
 
 KEEP_TURNS = 10  →  last 10 user/assistant exchanges kept verbatim.
 Older tool outputs (can be 3-6 KB each) are collapsed to ~10 tokens.
-Context pack results (114K+ chars) are never stubbed.
+Context pack results (up to 120K chars each) stay verbatim within the pack
+budget — they used to be exempt from trimming entirely and stacked
+unboundedly across a session.
+
+force_trim_messages() is the aggressive path stream.py uses to recover from
+a provider "prompt is too long" / context-length rejection (400/413).
 """
 from typing import List, Dict, Any
 import copy
@@ -26,8 +34,28 @@ KEEP_TURNS = 10
 # Increased from 80K to 200K to accommodate Connected Context Packs (114K+ chars).
 CHAR_BUDGET = 200_000  # ~50K tokens
 
-# Context pack signature — tool results starting with this are NEVER stubbed.
+# Context pack signature — tool results starting with this are context packs.
 _CONTEXT_PACK_PREFIX = "=== Connected Context Pack ==="
+
+# ── Context pack budget ──────────────────────────────────────────────────
+# A single pack can be ~120K chars and packs used to be exempt from trimming
+# entirely, so several could stack unboundedly across a session (they are
+# also exempt from the 6000-char tool cap in render.py).  Keep the newest
+# KEEP_PACKS packs verbatim — they back the current task — and keep older
+# packs verbatim only while the running (newest-first) total stays within
+# MAX_PACK_CHARS; everything older becomes PACK_STUB.  Stubbing a pack is a
+# content replacement inside the existing tool_result, so tool_use/tool_result
+# pairing is preserved.
+MAX_PACK_CHARS = 150_000   # total pack chars kept verbatim per request
+KEEP_PACKS = 2             # newest packs kept verbatim even if over budget
+PACK_STUB = "[context pack elided to save context — re-read with read_bundle]"
+_PACK_STUB_PREFIX = "[context pack elided"
+
+# Observable summary of the LAST trim_messages() call.  The return contract
+# stays a plain message list (callers unpack nothing), so tests/logging read
+# this dict instead: ``trimmed`` (content changed at all), ``packs_kept`` /
+# ``packs_stubbed`` (the pack-budget policy above).
+TRIM_STATS: Dict[str, Any] = {"trimmed": False, "packs_kept": 0, "packs_stubbed": 0}
 
 
 def _is_tool_result_block(block: Any) -> bool:
@@ -40,6 +68,30 @@ def _is_context_pack(block: Any) -> bool:
     if isinstance(content, str):
         return content.startswith(_CONTEXT_PACK_PREFIX)
     return False
+
+
+def _is_pack_block(block: Any) -> bool:
+    """A context pack tool_result — verbatim, or already elided to PACK_STUB."""
+    content = block.get("content", "")
+    if isinstance(content, str):
+        return (content.startswith(_CONTEXT_PACK_PREFIX)
+                or content.startswith(_PACK_STUB_PREFIX))
+    return False
+
+
+def _stub_block(block: Any) -> Dict:
+    """One tool_result with its content collapsed; tool_use_id kept so the
+    pair stays valid.  An already-elided pack stub passes through as-is."""
+    if isinstance(block.get("content", ""), str) and block["content"].startswith(_PACK_STUB_PREFIX):
+        return block
+    stub = {
+        "type": "tool_result",
+        "tool_use_id": block.get("tool_use_id", ""),
+        "content": PACK_STUB if _is_context_pack(block) else "[output trimmed to save context]",
+    }
+    if block.get("is_error"):
+        stub["is_error"] = True
+    return stub
 
 
 def _content_chars(content: Any) -> int:
@@ -136,10 +188,12 @@ def count_tool_calls(messages: List[Dict]) -> int:
     return n
 
 
-def _stub_tool_results(msg: Dict) -> Dict:
+def _stub_tool_results(msg: Dict, keep_pack_ids: set | None = None) -> Dict:
     """Return a copy of a user message with tool_result blocks collapsed.
 
-    Context pack results are preserved verbatim — never stubbed.
+    Context pack results are preserved verbatim only within the pack budget
+    (``keep_pack_ids`` — the tool_use_ids of packs to keep); older packs
+    collapse to PACK_STUB.
     """
     content = msg.get("content", "")
     if not isinstance(content, list):
@@ -147,22 +201,38 @@ def _stub_tool_results(msg: Dict) -> Dict:
     new_content = []
     for block in content:
         if _is_tool_result_block(block):
-            # ── preserve context packs ─────────────────────────────────
-            if _is_context_pack(block):
+            # ── preserve context packs within the budget ──────────────
+            if _is_pack_block(block) and (
+                keep_pack_ids is None or block.get("tool_use_id", "") in keep_pack_ids
+            ):
                 new_content.append(block)
                 continue
-            # ── stub everything else ───────────────────────────────────
-            stub = {
-                "type": "tool_result",
-                "tool_use_id": block.get("tool_use_id", ""),
-                "content": "[output trimmed to save context]",
-            }
-            if block.get("is_error"):
-                stub["is_error"] = True
-            new_content.append(stub)
+            new_content.append(_stub_block(block))
         else:
             new_content.append(block)
     return {**msg, "content": new_content}
+
+
+def _pack_keep_ids(messages: List[Dict]) -> set:
+    """tool_use_ids of the context packs to keep verbatim: the newest
+    KEEP_PACKS packs, plus older packs while the running (newest-first) total
+    stays within MAX_PACK_CHARS."""
+    pack_sizes: list[tuple[str, int]] = []
+    for msg in reversed(messages):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in reversed(content):
+            if _is_pack_block(block):
+                inner = block.get("content", "")
+                pack_sizes.append((block.get("tool_use_id", ""), len(inner) if isinstance(inner, str) else 0))
+    keep: set = set()
+    total = 0
+    for n, (tid, size) in enumerate(pack_sizes):
+        if n < KEEP_PACKS or total + size <= MAX_PACK_CHARS:
+            keep.add(tid)
+            total += size
+    return keep
 
 
 def trim_messages(messages: List[Dict]) -> List[Dict]:
@@ -170,6 +240,7 @@ def trim_messages(messages: List[Dict]) -> List[Dict]:
 
     Does NOT mutate state.messages — only affects what's sent to the API.
     """
+    TRIM_STATS.update(trimmed=False, packs_kept=0, packs_stubbed=0)
     if _total_chars(messages) <= CHAR_BUDGET:
         return messages  # nothing to do
 
@@ -181,6 +252,7 @@ def trim_messages(messages: List[Dict]) -> List[Dict]:
         return messages  # not enough history to trim anything
 
     cutoff_idx = user_indices[-KEEP_TURNS]  # first index of the "keep" window
+    keep_packs = _pack_keep_ids(messages)
 
     trimmed = []
     for i, msg in enumerate(messages):
@@ -188,10 +260,57 @@ def trim_messages(messages: List[Dict]) -> List[Dict]:
             trimmed.append(msg)  # keep verbatim
         else:
             # Older message — collapse tool results to stubs
-            # (context packs are preserved inside _stub_tool_results)
-            trimmed.append(_stub_tool_results(msg))
+            # (context packs preserved per the pack budget)
+            trimmed.append(_stub_tool_results(msg, keep_pack_ids=keep_packs))
 
+    # Observable summary for tests/logging (see TRIM_STATS above): count by
+    # actual content — a verbatim window pack is "kept" even when the budget
+    # didn't reserve room for it.
+    for msg in trimmed:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not _is_tool_result_block(block):
+                continue
+            inner = block.get("content", "")
+            if not isinstance(inner, str):
+                continue
+            if inner.startswith("=== Connected Context Pack ==="):
+                TRIM_STATS["packs_kept"] += 1
+            elif "context pack elided" in inner:
+                TRIM_STATS["packs_stubbed"] += 1
+    TRIM_STATS["trimmed"] = True
     return trimmed
+
+
+def force_trim_messages(messages: List[Dict] | None = None) -> List[Dict]:
+    """Aggressive trim for context-overflow recovery: stub EVERY tool result
+    (context packs included) outside the last KEEP_TURNS user turns.
+
+    Mutates the given list in place (``state.messages`` when omitted) and
+    returns it. User/assistant text is never dropped and tool_use_id is
+    kept on every stub, so tool_use/tool_result pairing stays valid — the
+    model can re-read anything it needs with the original tool.
+    """
+    if messages is None:
+        from .. import state as _state
+        messages = _state.messages
+    user_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    cutoff = user_indices[-KEEP_TURNS] if len(user_indices) > KEEP_TURNS else len(messages)
+    for i, msg in enumerate(messages):
+        if i >= cutoff:
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        messages[i] = {
+            **msg,
+            "content": [
+                _stub_block(b) if _is_tool_result_block(b) else b for b in content
+            ],
+        }
+    return messages
 
 # Tool screenshots kept as real images; older ones become a one-line note.
 KEEP_TOOL_IMAGES = 3

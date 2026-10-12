@@ -7,10 +7,14 @@ from unittest import mock
 from arkad.install_sync import SyncResult
 
 
-def test_cmd_upgrade_succeeds_after_managed_reset(monkeypatch):
+def test_cmd_upgrade_succeeds_after_managed_reset(monkeypatch, tmp_path):
     from arkad.commands import upgrade as upgrade_mod
 
-    root = upgrade_mod.pathlib.Path("/Users/prajwal/.local/share/arkad-agent")
+    # Use a real throwaway root with a .git dir — cmd_upgrade returns early at
+    # the "is not a git repository" guard (upgrade.py:87) otherwise. The old
+    # version hardcoded /Users/prajwal/… which only exists on one machine.
+    root = tmp_path
+    (root / ".git").mkdir()
     printed: list[str] = []
 
     monkeypatch.setattr(upgrade_mod, "find_install_root", lambda: root)
