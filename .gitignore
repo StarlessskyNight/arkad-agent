@@ -56,3 +56,9 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
+
+# Local scratch: agent audit notes
+.audit/
+
+# Unrelated one-off component
+ArtCraftLandingPage.jsx
