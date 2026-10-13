@@ -39,8 +39,8 @@ def _text(s):
     return SimpleNamespace(type="text", text=s)
 
 
-def _tool():
-    return SimpleNamespace(type="tool_use", name="read_file", input={}, id="t1")
+def _tool(input=None, name="read_file"):
+    return SimpleNamespace(type="tool_use", name=name, input=input or {}, id="t1")
 
 
 class _FakeStatus:
@@ -84,8 +84,10 @@ def _legacy_harness(monkeypatch, *, stop_reason="tool_use", blocks=None, render=
     """Fake model + console for ``arkad.main._send_and_loop``.
 
     Default: the model *always* asks for another tool call (never ``end_turn``)
-    — the runaway shape. ``render`` stands in for ``render_assistant``;
-    returning True means "tool results exist → keep looping".
+    — the runaway shape. Each call gets distinct arguments so these tests
+    exercise the iteration cap and not the repeated-action guard (that shape is
+    ``test_repeated_legacy_turn_warns_then_stops``). ``render`` stands in for
+    ``render_assistant``; returning True means "tool results exist → keep looping".
     """
     import arkad.main as m
 
@@ -95,8 +97,8 @@ def _legacy_harness(monkeypatch, *, stop_reason="tool_use", blocks=None, render=
 
     def fake_stream():
         calls["n"] += 1
-        return _resp(list(blocks if blocks is not None else [_tool()]),
-                     stop_reason=stop_reason)
+        out = list(blocks) if blocks is not None else [_tool(input={"n": calls["n"]})]
+        return _resp(out, stop_reason=stop_reason)
 
     monkeypatch.setattr(m, "call_claude_stream", fake_stream)
     monkeypatch.setattr(m, "render_assistant", render or (lambda resp: True))
@@ -301,5 +303,180 @@ def test_tui_loop_enforces_the_cap_and_ends_the_turn_cleanly(hermetic_app, monke
             assert not state.cancel_requested.is_set()
             assistants = [msg for msg in state.messages if msg["role"] == "assistant"]
             assert len(assistants) == 3
+
+    asyncio.run(run())
+
+
+# ─── repeated-action detection (utils/repeat.py) ─────────────────────────
+
+
+def _repeat_harness(monkeypatch, inputs):
+    """Legacy loop + a model that repeats one tool call. ``render`` mirrors the
+    real ``render_assistant``: it appends the tool_result turn the model reads
+    next, then returns True."""
+    import arkad.main as m
+    import arkad.repl.render as render
+
+    state = _isolate_state(monkeypatch)
+    calls = {"n": 0}
+    printed: list[str] = []
+    seq = iter(inputs)
+
+    def fake_stream():
+        calls["n"] += 1
+        return _resp([_tool(input=next(seq))], stop_reason="tool_use")
+
+    def fake_render(resp):
+        state.messages.append({"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]})
+        return True
+
+    monkeypatch.setattr(m, "call_claude_stream", fake_stream)
+    monkeypatch.setattr(m, "render_assistant", fake_render)
+    monkeypatch.setattr(m, "console", _FakeConsole(printed))
+    monkeypatch.setattr(render, "MAX_TOOL_OUTPUT", 6000)  # imported eagerly, unused here
+    return m, state, calls, printed
+
+
+def test_streak_counts_only_identical_consecutive_calls():
+    from arkad.utils.repeat import RepeatGuard
+
+    g = RepeatGuard(limit=3)
+    assert g.check(_resp([_tool(input={"path": "a.py"})])) is None
+    assert g.check(_resp([_tool(input={"path": "b.py"})])) is None, "different args reset"
+    assert g.check(_resp([_tool(input={"path": "a.py"})])) is None
+    assert g.check(_resp([_tool(input={"path": "a.py"})])) is None
+    assert g.check(_resp([_tool(input={"path": "a.py"})])) == "warn"
+    assert g.check(_resp([_tool(input={"path": "a.py"})])) == "stop"
+
+
+def test_arg_order_is_not_a_difference():
+    from arkad.utils.repeat import RepeatGuard
+
+    g = RepeatGuard(limit=3)
+    g.check(_resp([_tool(input={"a": 1, "b": 2})]))
+    assert g.streak == 1
+    g.check(_resp([_tool(input={"b": 2, "a": 1})]))
+    assert g.streak == 2, "same args in a different JSON order are the same call"
+
+
+def test_a_plain_reply_resets_the_streak():
+    from arkad.utils.repeat import RepeatGuard
+
+    g = RepeatGuard(limit=3)
+    g.check(_resp([_tool()]))
+    g.check(_resp([_tool()]))
+    g.check(_resp([_text("done")]))
+    assert g.streak == 0
+    assert g.check(_resp([_tool()])) is None, "counter starts over after progress"
+
+
+def test_batch_signature_covers_every_tool_in_the_turn():
+    from arkad.utils.repeat import RepeatGuard
+
+    two = [_tool(name="read_file"), _tool(name="search_code")]
+    g = RepeatGuard(limit=3)
+    for _ in range(2):
+        assert g.check(_resp(list(two))) is None
+    assert g.check(_resp(list(two))) == "warn"
+    g2 = RepeatGuard(limit=3)  # dropping one tool is a different batch → no warning
+    for _ in range(2):
+        g2.check(_resp(list(two)))
+    assert g2.check(_resp([two[0]])) is None
+
+
+def test_repeated_legacy_turn_warns_then_stops(monkeypatch):
+    same = {"path": "nope.py"}
+    m, state, calls, printed = _repeat_harness(monkeypatch, [dict(same)] * 10)
+    monkeypatch.setattr(M, "MAX_TURN_ITERATIONS", 50)
+
+    m._send_and_loop("keep calling the same thing")
+
+    # limit 3 → warn on #3, stop on #4 — far short of the 50-iteration cap.
+    assert calls["n"] == 4, calls["n"]
+    assert any("repeated action" in p for p in printed), printed
+    assert any("repeated-action guard" in p for p in printed), printed
+    assert not any("runaway guard" in p for p in printed), printed
+    # The nudge reached the model as part of the turn it reads next.
+    notes = [
+        b["text"]
+        for msg in state.messages
+        if isinstance(msg.get("content"), list)
+        for b in msg["content"]
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+    assert any("repeated action" in t for t in notes), notes
+
+
+def test_model_that_changes_its_mind_keeps_going(monkeypatch):
+    """Many *different* calls in a row is ordinary work, not a loop."""
+    paths = [{"path": f"f{i}.py"} for i in range(50)]
+    m, _state, calls, printed = _repeat_harness(monkeypatch, paths)
+
+    m._send_and_loop("read a lot of files")
+    assert calls["n"] == 50, "distinct calls never trip the guard — the cap ends the turn"
+    assert not any("repeated" in p for p in printed), printed
+    assert any("runaway guard" in p for p in printed), printed
+
+
+def test_repeat_streak_resets_between_turns(monkeypatch):
+    m, _state, calls, printed = _repeat_harness(monkeypatch, [{}] * 10)
+
+    m._send_and_loop("first")
+    assert calls["n"] == 4
+    calls["n"] = 0
+    m._send_and_loop("second")
+    assert calls["n"] == 4, "the streak — like the cap — is per user turn"
+
+
+def test_tui_loop_stops_on_a_repeated_tool_call(hermetic_app, monkeypatch):
+    """TUI parity: same warn-then-stop shape as the legacy loop."""
+    import asyncio
+
+    import arkad.repl.render as render
+    import arkad.repl.stream as stream
+    from arkad import state
+
+    from arkad import loop as L
+
+    L.end_loop()
+    monkeypatch.setattr(M, "MAX_TURN_ITERATIONS", 50)
+    calls = {"n": 0}
+
+    def fake_stream():
+        calls["n"] += 1
+        return _resp([_tool(input={"path": "nope.py"})], stop_reason="tool_use")
+
+    def fake_render(resp):
+        state.messages.append({"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "not found"}]})
+        return True
+
+    monkeypatch.setattr(stream, "call_claude_stream", fake_stream)
+    monkeypatch.setattr(render, "render_assistant", fake_render)
+    monkeypatch.setattr(state, "client", object())
+    monkeypatch.setattr(state, "messages", [])
+    monkeypatch.setattr(state, "current_session_id", None)
+    state.cancel_requested.clear()
+    state.prompt_queue.clear()
+
+    ArkadTUI = hermetic_app
+
+    async def run():
+        app = ArkadTUI()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.3)
+            app._begin_turn("keep calling the same thing")
+            end = time.monotonic() + 5.0
+            while app._busy and time.monotonic() < end:
+                await pilot.pause(0.05)
+            assert not app._busy, "must end the turn via _turn_done (no dangling busy)"
+            await pilot.pause(0.2)
+            text = app.query_one("#transcript").plain_text()
+            assert "repeated action" in text, text
+            assert "repeated-action guard" in text, text
+            assert "runaway guard" not in text, text
+            assert calls["n"] == 4, f"warn on #3, stop on #4 — got {calls['n']}"
+            assert not app._turn_cancelled
 
     asyncio.run(run())

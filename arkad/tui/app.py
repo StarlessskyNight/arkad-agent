@@ -1685,6 +1685,9 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
 
             empty_retries = 0
             iterations = 0
+            from ..utils.repeat import RepeatGuard
+
+            repeat_guard = RepeatGuard()
             while True:
                 if stale() or state.turn_cancelled():
                     raise KeyboardInterrupt()
@@ -1729,10 +1732,28 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
                     break
                 if stale() or state.turn_cancelled():
                     raise KeyboardInterrupt()
+                # Repeated-action guard: identical tool call N times in a row —
+                # nudge the model once, stop the turn if it ignores that.
+                repeat = repeat_guard.check(resp)
+                if repeat:
+                    from ..utils.repeat import inject_note
+
+                    inject_note(repeat_guard.warn_text() if repeat == "warn"
+                                else repeat_guard.stop_text())
+                    if repeat == "warn":
+                        self._tui_console.print(
+                            f"[{ui.WARN}]⚠ {repeat_guard.warn_text()}[/]"
+                        )
+                    else:
+                        self._tui_console.print(
+                            f"[{ui.ERR}]✗ {repeat_guard.stop_text()}[/]"
+                        )
                 # "⚡ send now" messages join the tool results the model reads next.
                 self._inject_steered()
                 if state.current_session_id and state.messages and state.messages[-1] is not asst_msg:
                     db_append_message(state.current_session_id, len(state.messages) - 1, state.messages[-1])
+                if repeat == "stop":
+                    break
         except KeyboardInterrupt:
             if not stale():
                 self._turn_cancelled = True

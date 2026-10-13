@@ -30,6 +30,12 @@ MAX_PARALLEL_TOOLS = _env_int("ARKAD_MAX_PARALLEL_TOOLS", 64, 1, 64)
 # resets every turn; the loops stop cleanly with a user-facing message once
 # this many model calls have run. Override: ARKAD_MAX_ITERATIONS (clamped 1..500).
 MAX_TURN_ITERATIONS = _env_int("ARKAD_MAX_ITERATIONS", 50, 1, 500)
+# Repeated-action detection: consecutive iterations that re-issue an *identical*
+# tool call (same name, same arguments). At this many in a row the loop tells the
+# model it is looping; one more identical call and the turn stops — much cheaper
+# than burning MAX_TURN_ITERATIONS. Stays a safety net; see utils/repeat.py.
+# Override: ARKAD_REPEAT_CALL_LIMIT (clamped 2..20).
+REPEAT_CALL_LIMIT = _env_int("ARKAD_REPEAT_CALL_LIMIT", 3, 2, 20)
 
 # ── Numeric / behavior constants ───────────────────────────────────────────────
 FILE_PERMISSION = 0o600

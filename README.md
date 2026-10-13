@@ -118,6 +118,7 @@ In-session: `/model`, `/key`, `/provider` switch backends; `/mcp`, `/agent`, `/s
 | `CLAUDE_MODEL` | free-tier default | Override the startup model |
 | `ARKAD_WEB_HOST` | `127.0.0.1` | Bind address for `--web` |
 | `ARKAD_MAX_ITERATIONS` | `50` | Runaway guard per turn |
+| `ARKAD_REPEAT_CALL_LIMIT` | `3` | Identical tool calls in a row before Arkad warns, then stops |
 | `ARKAD_MODELS_DEV` | on | Set `0` to disable the models.dev catalog |
 
 Keys live in the environment or `~/.config/arkad-agent/provider`; project `.mcp.json` servers require approval before running.

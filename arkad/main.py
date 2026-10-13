@@ -317,6 +317,9 @@ def _send_and_loop(inp: str | list[dict]):
         db_set_title_if_empty(state.current_session_id, title)
     empty_retries = 0
     iterations = 0
+    from .utils.repeat import RepeatGuard
+
+    repeat_guard = RepeatGuard()
     try:
         while True:
             if state.cancel_requested.is_set():
@@ -361,9 +364,24 @@ def _send_and_loop(inp: str | list[dict]):
             # render_assistant tool calls, break out cleanly
             if state.cancel_requested.is_set():
                 raise KeyboardInterrupt()
+            # Repeated-action guard: the model re-issued the identical tool call.
+            # Warn once (the model gets the note as part of its next turn), then
+            # stop if it ignores it and does it again.
+            repeat = repeat_guard.check(resp)
+            if repeat:
+                from .utils.repeat import inject_note
+
+                inject_note(repeat_guard.warn_text() if repeat == "warn"
+                            else repeat_guard.stop_text())
+                if repeat == "warn":
+                    console.print(f"[yellow]⚠ {repeat_guard.warn_text()}[/]")
+                else:
+                    console.print(f"[red]✗ {repeat_guard.stop_text()}[/]")
             # tool results get appended inside render_assistant via messages — persist the latest
             if state.current_session_id and state.messages and state.messages[-1] is not asst_msg:
                 db_append_message(state.current_session_id, len(state.messages) - 1, state.messages[-1])
+            if repeat == "stop":
+                break
     except KeyboardInterrupt:
         console.print("\n[yellow]interrupted[/]")
     except Exception as e:
