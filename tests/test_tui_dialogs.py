@@ -170,11 +170,11 @@ def test_palette_groups_when_browsing_and_flattens_when_searching(hermetic_app):
             headers = [str(opts.get_option_at_index(i).prompt).strip()
                        for i in range(opts.option_count) if opts.get_option_at_index(i).disabled]
             assert headers[:2] == ["SESSION", "MODEL & AGENT"]
-            for ch in "them":
+            for ch in "sess":
                 await pilot.press(ch)
             await pilot.pause(0.1)
             assert not any(opts.get_option_at_index(i).disabled for i in range(opts.option_count))
-            assert _enabled_ids(opts)[0].startswith("/theme")
+            assert _enabled_ids(opts)[0].startswith("/session")
 
     asyncio.run(run())
 

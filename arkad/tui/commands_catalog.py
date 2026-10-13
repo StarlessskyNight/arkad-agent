@@ -37,8 +37,6 @@ COMMANDS = [
     ("/agent init", "scaffold a .arkad/ tree in the current project"),
     # Custom commands — user-defined prompt templates triggered as /<name>
     ("/command", "open the command manager modal (new · edit · delete · import/export · global)"),
-    # Theme — modal handles the picker
-    ("/theme", "open the theme picker (live preview)"),
     # Scan
     ("/scan", "AI-powered deep scan: identity / docs / projects → memory"),
     # MCP — single modal for everything

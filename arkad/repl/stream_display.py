@@ -28,8 +28,8 @@ class RichAssistantStreamDisplay:
         self._live.start()
 
     def _panel(self) -> Panel:
-        # Resolve the border from the live theme (nightwing's neon glow,
-        # rose's magenta, …) so a /theme switch recolors the stream too.
+        # Resolve the border from the live theme (nightwing's neon glow)
+        # so the stream always matches the surrounding chrome.
         try:
             from ..tui import theme as ui
             border = ui.ACCENT_2

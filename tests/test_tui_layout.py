@@ -47,7 +47,7 @@ def _hex(color) -> str:
 
 
 def test_dialog_chrome_applies_at_startup(hermetic_app, model_picker):
-    """Shared chrome must style dialogs without a /theme switch first
+    """Shared chrome must style dialogs before any CSS is re-applied
     (scoped DEFAULT_CSS used to turn `.tui-modal-screen #modal` into a
     selector that never matched)."""
     from arkad.tui import theme as ui
@@ -68,39 +68,6 @@ def test_dialog_chrome_applies_at_startup(hermetic_app, model_picker):
             assert not frame.styles.height.is_auto and frame.styles.height.value == 85
 
     asyncio.run(run())
-
-
-def test_theme_switch_recolors_open_dialog_and_keeps_its_size(hermetic_app, model_picker,
-                                                              monkeypatch):
-    from arkad import state
-    from arkad.tui import theme as ui
-
-    before = ui.active_theme()
-    # The shipped picker is single-theme (rose); inject a throwaway second
-    # palette so the theme-switch assertions still exercise a real switch.
-    if len(ui.theme_names()) < 2:
-        monkeypatch.setitem(ui.THEME_DESCRIPTIONS, "_testtheme", "test")
-        monkeypatch.setitem(ui.PALETTES, "_testtheme", dict(ui.PALETTES["rose"], bg_1="#123456"))
-    target = next(n for n in ui.theme_names() if n != before)
-    monkeypatch.setattr(state, "theme", state.theme)
-    monkeypatch.setattr(state, "theme_colors", dict(getattr(state, "theme_colors", {}) or {}))
-
-    async def run() -> None:
-        app = hermetic_app()
-        async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause(0.2)
-            app.push_screen(model_picker())
-            await pilot.pause(0.4)
-            app._apply_theme_runtime(target, rebuild_transcript=False)
-            await pilot.pause(0.3)
-            frame = app.screen.query_one("#modal")
-            assert _hex(frame.styles.background) == ui.PALETTES[target]["bg_1"].lower()
-            assert not frame.styles.height.is_auto and frame.styles.height.value == 85
-
-    try:
-        asyncio.run(run())
-    finally:
-        ui.set_theme(before)
 
 
 def test_activity_row_collapses_when_idle(hermetic_app):

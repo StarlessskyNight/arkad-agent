@@ -29,7 +29,6 @@ from ..app_commands import (
     _is_pin_modal_command,
     _is_lesson_modal_command,
     _is_settings_modal_command,
-    _is_theme_modal_command,
 )
 from .. import theme as ui
 from ... import state
@@ -509,7 +508,6 @@ class WebRemoteMixin:
             or _is_pin_modal_command(s)
             or _is_lesson_modal_command(s)
             or _is_settings_modal_command(s)
-            or _is_theme_modal_command(s)
 
             or s.lower() == "/local"
             or s.lower() == "/web"

@@ -60,9 +60,7 @@ _SECTIONS = [
         ("/web hide · /web show", "hide / pin the corner QR (or click the QR to hide it)"),
         ("/web copy · /web stop", "copy the link · stop the web remote"),
     ]),
-    ("Theme", [
-        ("/theme", "open the theme picker (15 themes — live preview)"),
-    ]),
+
     ("MCP (Model Context Protocol)", [
         ("/mcp", "open the MCP control modal — list, toggle, import JSON, scope"),
     ]),

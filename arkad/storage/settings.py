@@ -1,6 +1,6 @@
 """Unified user preferences — single ``settings.json`` per user.
 
-All toggleable preferences (theme, model, skills/mcp global scope, think mode,
+All toggleable preferences (model, skills/mcp global scope, think mode,
 …) read from and write to one file::
 
     ~/.config/arkad-agent/settings.json
@@ -10,7 +10,6 @@ run ``/settings reload`` (or restart) to pick up changes::
 
     {
       "model": "sonnet-4-6",
-      "theme": "nightwing",
       "skills": { "global": false },
       "mcp":    { "global": false },
       "think":  { "mode": true, "effort": "high" },
@@ -18,7 +17,7 @@ run ``/settings reload`` (or restart) to pick up changes::
     }
 
 On first load, values are migrated from the legacy per-feature files
-(``last_model.json``, ``last_theme.json``, ``skills_config.json``,
+(``last_model.json``, ``skills_config.json``,
 ``mcp_config.json``, ``think_config.json``). The legacy files are not deleted
 — they remain as a one-way snapshot. After migration, only ``settings.json``
 is written.
@@ -36,7 +35,6 @@ from typing import Any
 from ..constants import (
     CONFIG_DIR,
     LAST_MODEL_FILE,
-    LAST_THEME_FILE,
     SKILLS_CONFIG_FILE,
     THINK_CONFIG_FILE,
     MCP_PREFS_FILE,
@@ -55,7 +53,6 @@ SETTINGS_FILE = CONFIG_DIR / "settings.json"
 DEFAULTS: dict[str, Any] = {
     "model":    "",          # empty string == fall back to constants.MODEL
     "provider": "",          # empty string == resolve from provider file / auth
-    "theme":  "nightwing",
     "agent":  {"active": "", "global": True},   # global agents visible by default
     "skills": {"global": False},
     "mcp":    {"global": False},
@@ -70,7 +67,7 @@ DEFAULTS: dict[str, Any] = {
 # Bumped when a default changes in a way that files written by older versions
 # must follow. Kept in settings.json as "_version" — outside DEFAULTS, so
 # /settings doesn't list it.
-SETTINGS_VERSION = 2
+SETTINGS_VERSION = 3
 _VERSION_KEY = "_version"
 
 
@@ -86,6 +83,9 @@ def _upgrade(doc: dict) -> bool:
     think = doc.get("think")
     if isinstance(think, dict) and think.get("effort") == "medium":
         think["effort"] = "high"
+    # v3 — theme switching is gone (Nightwing is the only palette), so the
+    # persisted "theme" key is dropped.
+    doc.pop("theme", None)
     doc[_VERSION_KEY] = SETTINGS_VERSION
     return True
 
@@ -151,27 +151,14 @@ def _atomic_write(path: pathlib.Path, text: str) -> None:
 
 # ── Settings class ───────────────────────────────────────────────────────
 
-_VALID_THEMES = ("red", "blue", "purple", "green", "orange", "yellow", "rose", "slate", "ocean", "cyberpunk", "monochrome", "forest", "dracula", "sunset", "dark")
 _VALID_THINK_EFFORTS = THINK_EFFORTS
-
-
-def _valid_themes() -> tuple[str, ...]:
-    """Every TUI palette (falls back to the classic list if the TUI can't load)."""
-    try:
-        from ..tui.theme import PALETTES
-
-        return tuple(PALETTES)
-    except Exception:
-        return _VALID_THEMES
 
 
 def _coerce(path: str, value: Any) -> Any:
     """Light validation/coercion for known paths."""
     if path == "theme":
-        valid = _valid_themes()
-        if value not in valid:
-            raise ValueError(f"theme must be one of {valid}")
-        return value
+        # Nightwing is the only palette and is not switchable.
+        raise ValueError("theme is fixed (nightwing) and cannot be changed")
     if path == "web.tunnel":
         v = str(value).strip().lower()
         if v not in ("auto", "cloudflare", "ngrok"):
@@ -255,6 +242,7 @@ class Settings:
         # Model + provider are global preferences — never overridden per project.
         project.pop("model", None)
         project.pop("provider", None)
+        project.pop("theme", None)   # single palette — no theme to set
 
         merged = _deep_merge(legacy, on_disk)
         merged = _deep_merge(merged, project)
@@ -418,10 +406,6 @@ def _migrate_legacy() -> dict[str, Any]:
     m = _read_json(LAST_MODEL_FILE).get("model")
     if isinstance(m, str) and m.strip():
         out["model"] = m.strip()
-
-    t = _read_json(LAST_THEME_FILE).get("theme")
-    if isinstance(t, str) and t in _valid_themes():
-        out["theme"] = t
 
     s = _read_json(SKILLS_CONFIG_FILE).get("global_skills")
     if isinstance(s, bool):

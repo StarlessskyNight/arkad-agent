@@ -32,7 +32,7 @@ from . import theme as ui
 
 _DESCRIPTIONS: dict[str, str] = {
     "model":         "Active model identifier",
-    "theme":         "Visual theme — red or purple",
+
     "agent.active":  "Persisted active agent name (empty = default)",
     "agent.global":  "Include agents from ~/.arkad, ~/.claude, ~/.opencode",
     "skills.global": "Include skills from ~/.config/*/skills (otherwise project-only)",

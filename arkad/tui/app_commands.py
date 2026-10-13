@@ -72,9 +72,7 @@ def _is_settings_modal_command(text: str) -> bool:
     return s in ("/settings", "/setting")
 
 
-def _is_theme_modal_command(text: str) -> bool:
-    s = (text or "").strip().lower()
-    return s in ("/theme", "/themes")
+
 
 
 

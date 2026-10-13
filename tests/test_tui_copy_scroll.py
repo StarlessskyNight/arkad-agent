@@ -384,15 +384,15 @@ def test_slash_popup_filters_and_completes(hermetic_app):
             await pilot.press("slash")
             await pilot.pause(0.1)
             assert app.completion_active, "typing / should open the command popup"
-            for ch in "the":
+            for ch in "sess":
                 await pilot.press(ch)
             await pilot.pause(0.1)
             opts = app.query_one("#popup_list")
             first = opts.get_option_at_index(opts.highlighted).id
-            assert first.startswith("/theme"), first
+            assert first.startswith("/session"), first
             await pilot.press("tab")
             await pilot.pause(0.1)
-            assert app.query_one("#prompt").text == "/theme"
+            assert app.query_one("#prompt").text.startswith("/session")
             assert not app.completion_active
             await pilot.press("escape")
 

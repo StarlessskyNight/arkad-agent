@@ -156,22 +156,7 @@ def welcome_banner(compact: bool = False, skip_art: bool = False):
     from ..constants import VERSION
     import pathlib
 
-    # Art uses accent_3 (the "highlight" token) — varies per theme:
-    #   red       → #ffa198 (coral)
-    #   blue      → #79f0ff (cyan)
-    #   purple    → #f0b3ff (pink)
-    #   green     → #a3f0bf (mint)
-    #   orange    → #fec77d (golden)
-    #   yellow    → #f0d272 (pale gold)
-    #   rose      → #ffb3c6 (soft pink)
-    #   slate     → #d0d7de (light gray)
-    #   ocean     → #93c5fd (sky blue)
-    #   cyberpunk → #f0aaff (neon pink)
-    #   monochrome→ #808080 (gray)
-    #   forest    → #aed581 (light green)
-    #   dracula   → #8be9fd (cyan)
-    #   sunset    → #f7c08a (peach)
-    #   dark      → #ce9178 (warm orange)
+    # Art uses accent_3 (the "highlight" token) — nightwing's neon cyan.
     art = None if (compact or skip_art) else welcome_art_for_width(_console_width())
     if art:
         palette = [c['accent_3'], c['accent'], c['accent_2'], c['accent'], c['accent_3'], c['accent_2'], c['accent']]

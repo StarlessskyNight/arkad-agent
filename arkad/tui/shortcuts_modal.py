@@ -30,7 +30,7 @@ _SHORTCUTS = """
 [bold]Agents & modes[/]
   ⇥              cycle agent (empty prompt)
   ⇧⇥             toggle plan mode (read-only research)
-  /model         switch model · /think effort · /theme colors
+  /model         switch model · /think effort
 
 [bold]Transcript[/]
   mouse wheel    scroll · select text to copy it

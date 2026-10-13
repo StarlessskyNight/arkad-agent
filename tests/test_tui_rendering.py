@@ -87,23 +87,20 @@ def test_prompt_history_persists_and_dedupes(tmp_path):
     assert h.next() is None
 
 
-# ── themes ───────────────────────────────────────────────────────────────
+# ── theme ────────────────────────────────────────────────────────────────
 
 
-def test_every_palette_is_selectable_and_builds_a_textual_theme():
+def test_nightwing_is_the_only_palette_and_builds_a_textual_theme():
     from arkad import state
-    from arkad.storage.settings import _coerce
     from arkad.tui import theme as ui
 
-    names = ui.theme_names()
-    assert set(names) == set(ui.PALETTES)
-    assert names[0] == ui.DEFAULT_THEME
-    for name in names:
-        assert _coerce("theme", name) == name, f"settings rejects theme {name}"
-        assert name in state.THEMES, f"state.THEMES missing {name}"
-        th = ui.textual_theme(name)
-        assert th.name == ui.textual_theme_name(name)
-        assert "jv-accent" in th.variables and "jv-user-bg" in th.variables
+    assert list(ui.PALETTES) == [ui.DEFAULT_THEME] == ["nightwing"]
+    assert ui.active_theme() == "nightwing"
+    assert state.theme == "nightwing"
+    assert "nightwing" in state.THEMES
+    th = ui.textual_theme()
+    assert th.name == ui.textual_theme_name() == "arkad-nightwing"
+    assert "jv-accent" in th.variables and "jv-user-bg" in th.variables
 
 
 def test_paste_chips_round_trip():

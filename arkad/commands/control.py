@@ -105,9 +105,6 @@ def handle_control(c: str, arg: str):
     if c in ("/model", "/mode"):
         _handle_model(arg)
         return True, None
-    if c == "/theme":
-        _handle_theme(arg)
-        return True, None
     if c == "/provider":
         _handle_provider(arg)
         return True, None
@@ -696,40 +693,3 @@ def _handle_provider(arg: str, *, skip_key_prompt: bool = False, auth_mode: str 
         console.print(f"[red]failed to switch provider: {e}[/]")
         state.provider = prev_provider
         _secure_write(PROVIDER_FILE, prev_provider)
-
-
-def _handle_theme(arg: str) -> None:
-    """/theme [red|purple] — switch visual theme."""
-    target = arg.strip().lower()
-    valid = list(state.THEMES.keys())
-    if not target:
-        cur = state.theme
-        lines = [
-            f"current theme: [bold]{cur}[/]\n",
-            "available themes:",
-        ]
-        for t in valid:
-            marker = " ← active" if t == cur else ""
-            lines.append(f"  [cyan]{t}[/]{marker}")
-        lines.append("\nusage: [dim]/theme <name>[/]  —  " + ", ".join(valid))
-        console.print(Panel("\n".join(lines), title="✦ theme", border_style="cyan"))
-        return
-
-    if target not in valid:
-        console.print(f"[red]unknown theme: {target}[/]  valid: {', '.join(valid)}")
-        return
-
-    if target == state.theme:
-        console.print(f"[dim]already on {target} theme[/]")
-        return
-
-    state.theme = target
-    state.theme_colors = state.THEMES[target]
-    # Persist so it survives restarts (unified settings.json).
-    try:
-        from ..storage.settings import get_settings
-        get_settings().set("theme", target)
-    except Exception:
-        pass
-    console.print(f"[green]✓ switched to [bold]{target}[/] theme[/]")
-    header_panel(compact=True)

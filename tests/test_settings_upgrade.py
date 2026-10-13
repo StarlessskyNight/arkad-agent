@@ -53,7 +53,8 @@ def test_set_global_on_an_old_file_upgrades_it_first(settings_file):
 
 def test_version_marker_is_not_a_user_setting(settings_file):
     s = Settings(settings_file)
-    s.set("theme", "nightwing")
+    # Any user setting will do — "theme" is fixed (nightwing) and now raises.
+    s.set("pin.enabled", False)
     assert "_version" in json.loads(settings_file.read_text())
     assert "_version" not in s.all()
     assert "_version" not in s.overrides()

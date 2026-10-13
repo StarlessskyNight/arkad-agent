@@ -56,7 +56,6 @@ from .app_commands import (  # noqa: F401
     _is_pin_modal_command,
     _is_lesson_modal_command,
     _is_settings_modal_command,
-    _is_theme_modal_command,
     _is_provider_hub_command,
     _is_local_command,
 )
@@ -191,7 +190,7 @@ _TIPS = (
     "Tip: click a tool row to see its output",
     "Tip: ⌃B toggles the session sidebar",
     "Tip: drop an image or PDF into the prompt to attach it",
-    "Tip: /model switches models · /theme changes colors",
+    "Tip: /model switches models · ⌃P finds every command",
     "Tip: !git status runs a shell command without the model",
     "Tip: ⌃G (or ✦ enhance) fixes spelling & grammar before you send",
     "Tip: click 🌐 web (right of the prompt) to open this session in your browser",
@@ -889,8 +888,6 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
             self._open_lesson_modal()
         elif _is_settings_modal_command(stripped):
             self._open_settings_modal()
-        elif _is_theme_modal_command(stripped):
-            self._open_theme_modal()
         elif _is_local_command(stripped):
             rest = stripped[len("/local "):] if stripped.startswith("/local ") else ""
             self._open_local_cmd_modal(initial=rest)
@@ -1081,70 +1078,6 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
         from .settings_modal import SettingsModalScreen
 
         self.push_screen(SettingsModalScreen(), after)
-
-    def _apply_theme_runtime(self, name: str, *, rebuild_transcript: bool) -> None:
-        """Apply a TUI theme immediately without requiring a restart."""
-        from . import theme as _tui_theme
-        from .modal_chrome import reload_chrome_css
-        import inspect
-
-        _tui_theme.set_theme(name)
-        reload_chrome_css()
-        if name in state.THEMES:
-            state.theme = name
-            state.theme_colors = dict(state.THEMES[name])
-
-        try:
-            prompt = self.query_one("#prompt", PromptArea)
-            from .prompt_highlight import PROMPT_THEME_NAME, build_prompt_text_area_theme
-
-            prompt.register_theme(build_prompt_text_area_theme())
-            prompt._set_theme(PROMPT_THEME_NAME)
-            prompt.refresh_file_ref_highlights()
-        except Exception:
-            pass
-
-        app_path = ""
-        try:
-            app_path = inspect.getfile(self.__class__)
-        except (TypeError, OSError):
-            pass
-        read_from = (app_path, f"{self.__class__.__name__}.CSS")
-        # Only the app chrome: dialog chrome is TuiModalScreen's default CSS
-        # ($jv-* variables). Re-adding it here as app CSS would outrank each
-        # dialog's own sizing rules.
-        self.stylesheet.add_source(
-            _tui_theme.GLOBAL_CSS,
-            read_from=read_from,
-            is_default_css=False,
-        )
-        tname = _tui_theme.textual_theme_name(name)
-        try:
-            self.register_theme(_tui_theme.textual_theme(name))
-        except Exception:
-            pass
-        if self.theme != tname:
-            self.theme = tname  # re-resolves every $variable + reparses CSS
-        else:
-            self.stylesheet.reparse()
-            self.stylesheet.update(self)
-        self.refresh(layout=True)
-        try:
-            self.screen.refresh(layout=True)
-        except Exception:
-            pass
-        self._sync_agent_color()
-        self._rebuild_transcript(layout=False)
-
-    def _open_theme_modal(self):
-        def after(name: object) -> None:
-            if name and isinstance(name, str):
-                self._apply_theme_runtime(name, rebuild_transcript=True)
-                self.notify(f"Theme: {name}", timeout=2.5)
-            self._set_status("ready")
-        from .theme_modal import ThemePickerScreen
-
-        self.push_screen(ThemePickerScreen(), after)
 
     def _open_oauth_modal(self, *, title: str = "OAuth login") -> None:
         def after(result) -> None:
@@ -1913,7 +1846,7 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
             if next_prompt.startswith("/"):
                 head = next_prompt.split(maxsplit=1)[0]
                 if head in ("/model", "/mode", "/session", "/sessions",
-                            "/settings", "/theme", "/agent", "/skills", "/memory",
+                            "/settings", "/agent", "/skills", "/memory",
                             "/lesson", "/mcp", "/think", "/local", "/pin", "/command",
                             "/commands", "/skill", "/sidebar"):
                     self._handle_queued_command(next_prompt)

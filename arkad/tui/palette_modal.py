@@ -26,7 +26,7 @@ _GROUPS: list[tuple[str, list[str]]] = [
                        "/plan", "/auto", "/verbose"]),
     ("Context & memory", ["/pin", "/unpin", "/memory", "/lesson", "/skill", "/scan"]),
     ("Tools", ["/local", "/mcp", "/command", "/loop"]),
-    ("App", ["/theme", "/sidebar", "/settings", "/stats",
+    ("App", ["/sidebar", "/settings", "/stats",
              "/upgrade", "/version", "/help"]),
 ]
 from .mouse_toggle import enable_mouse, disable_mouse

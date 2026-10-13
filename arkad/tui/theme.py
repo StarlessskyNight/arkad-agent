@@ -3,17 +3,16 @@
 Every widget, modal, and rendered block pulls colors from the palette
 tokens here. Changing a token in one place changes the entire UI.
 
-Themes
-------
-PALETTES holds every built-in color scheme. set_theme(name)
-reassigns the module-level tokens (BG_0 … ACCENT_3) and rebuilds
-the two CSS strings; textual_theme(name) builds the matching Textual
-Theme whose $jv-* variables drive the transcript widgets, so a
-theme switch restyles the live conversation without re-rendering it.
+Theme
+-----
+Nightwing is the single, non-optional palette. PALETTES holds it and
+set_theme(name) reassigns the module-level tokens (BG_0 … ACCENT_3) and
+rebuilds the two CSS strings; textual_theme(name) builds the matching
+Textual Theme whose $jv-* variables drive the transcript widgets.
 
-Other modules that need theme-aware colors at runtime should use
+Other modules that need theme colors at runtime should use
 from . import theme as ui → ui.OK, ui.ACCENT_2, … (never
-cache the individual constants — they change on every switch).
+cache the individual constants).
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ from __future__ import annotations
 Palette = dict[str, str]
 
 PALETTES: dict[str, Palette] = {
-    # Custom "Nightwing" palette — midnight black base, navy panels,
+    # "Nightwing" — the one and only palette: midnight black base, navy panels,
     # electric-blue branding, neon-cyan active highlights, steel chrome.
     "nightwing": {
         "bg_0": "#05070a",      # Midnight Black — app background
@@ -45,36 +44,6 @@ PALETTES: dict[str, Palette] = {
         "accent_2": "#00d2ff",  # RAM/CPU meters, ⚡ bolts, cursor block
         "accent_3": "#00d2ff",
     },
-    "rose": {
-        "bg_0": "#0b0f15",
-        "bg_1": "#11161d",
-        "bg_2": "#161c24",
-        "bg_3": "#1c232c",
-        "bg_4": "#232b36",
-        "border": "#2a323d",
-        "border_fc": "#f7527a",
-        "fg": "#e6edf3",
-        "fg_mute": "#9aa4b1",
-        "fg_dim": "#6b7684",
-        "sep": "#1f2630",
-        "ok": "#56d364",
-        "warn": "#e3b341",
-        "err": "#f85149",
-        "accent": "#f7527a",
-        "accent_2": "#ff7b9a",
-        "accent_3": "#ffb3c6",
-    },
-}
-
-# Newer palettes — tuned for the minimal (borderless) transcript. The first
-# three are the most-requested editor schemes; "opencode" and "claude" follow
-# the look of those two agent TUIs.
-
-
-# One-line descriptions for the /theme picker (order = picker order).
-THEME_DESCRIPTIONS: dict[str, str] = {
-    "nightwing": "midnight black + navy panels, electric-blue accents",
-    "rose": "hot pink accents, magenta borders",
 }
 
 DEFAULT_THEME = "nightwing"
@@ -82,25 +51,25 @@ DEFAULT_THEME = "nightwing"
 
 # ── Tokens (module-level constants — reassigned by set_theme()) ──────────
 
-BG_0 = "#0b0f15"
-BG_1 = "#11161d"
-BG_2 = "#161c24"
-BG_3 = "#1c232c"
-BG_4 = "#232b36"
-BORDER = "#2a323d"
-BORDER_FC = "#4d8df6"
-FG = "#e6edf3"
-FG_MUTE = "#9aa4b1"
-FG_DIM = "#6b7684"
-SEP = "#1f2630"
+BG_0 = "#05070a"
+BG_1 = "#0c162e"
+BG_2 = "#0c162e"
+BG_3 = "#1a243c"
+BG_4 = "#242f46"
+BORDER = "#4a5d78"
+BORDER_FC = "#00d2ff"
+FG = "#b9cadb"
+FG_MUTE = "#4a5d78"
+FG_DIM = "#4a5d78"
+SEP = "#283241"
 OK = "#56d364"
 WARN = "#e3b341"
 ERR = "#f85149"
-ACCENT = "#79c0ff"
-ACCENT_2 = "#c084fc"
-ACCENT_3 = "#f0b3ff"
+ACCENT = "#0088ff"
+ACCENT_2 = "#00d2ff"
+ACCENT_3 = "#00d2ff"
 # Block-cursor / active-highlight color. Palettes may override it with a
-# "cursor" key; otherwise the cursor follows the accent (as before).
+# "cursor" key; otherwise the cursor follows the accent.
 CURSOR = ACCENT
 
 
@@ -588,10 +557,9 @@ _ACTIVE_THEME: str = DEFAULT_THEME
 
 
 def set_theme(name: str) -> None:
-    """Switch all theme tokens + CSS strings to the named palette.
+    """Point all theme tokens + CSS strings at the named palette.
 
-    The app applies the change live via ``ArkadTUI._apply_theme_runtime``
-    (stylesheet rebuild + ``App.theme`` swap).
+    Nightwing is the only palette; an unknown name falls back to it.
     """
     global _ACTIVE_THEME
     global BG_0, BG_1, BG_2, BG_3, BG_4
@@ -634,12 +602,6 @@ def set_theme(name: str) -> None:
 def active_theme() -> str:
     """Return the name of the currently active theme."""
     return _ACTIVE_THEME
-
-
-def theme_names() -> list[str]:
-    """Palette names in picker order (described ones first)."""
-    ordered = [n for n in THEME_DESCRIPTIONS if n in PALETTES]
-    return ordered + [n for n in PALETTES if n not in THEME_DESCRIPTIONS]
 
 
 # ── Init at module load time ─────────────────────────────────────────────

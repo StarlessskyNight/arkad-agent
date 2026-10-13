@@ -43,7 +43,7 @@ export const CATALOG = [
   { group: 'Memory', cmd: '/scan', label: 'Scan project', desc: 'Deep scan of identity and docs', icon: 'scan-search' },
 
   { group: 'On your computer', cmd: '/settings', label: 'All settings', desc: 'Every preference, in the terminal', icon: 'sliders-horizontal', laptop: true },
-  { group: 'On your computer', cmd: '/theme', label: 'Terminal theme', desc: 'Colours of the terminal app', icon: 'palette', laptop: true },
+
   { group: 'On your computer', cmd: '/agent init', label: 'Scaffold .arkad/', desc: 'Create the project agent folders', icon: 'folder-plus', laptop: true },
 
   { group: 'Help', action: 'shortcuts', label: 'Keyboard shortcuts', desc: 'Every key that does something here', icon: 'keyboard', keys: 'keys hotkeys help' },

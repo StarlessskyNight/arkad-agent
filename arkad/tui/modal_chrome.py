@@ -51,12 +51,6 @@ def _render_theme_placeholders(css: str) -> str:
     return css
 
 
-def reload_chrome_css() -> None:
-    """Back-compat no-op in practice: the chrome no longer varies by theme."""
-    global TUI_MODAL_CHROME_CSS
-    TUI_MODAL_CHROME_CSS = _theme.MODAL_CSS
-
-
 class TuiModalScreen(ModalScreen[TDismiss]):
     """Adds ``tui-modal-screen`` and owns the shared dialog chrome.
 

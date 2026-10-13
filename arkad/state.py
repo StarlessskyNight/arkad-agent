@@ -195,20 +195,14 @@ global_agents: bool = True
 global_commands: bool = True
 
 # ── visual theme ────────────────────────────────────────────────────────────
-# These are kept in sync with arkad/tui/theme.py PALETTES.
-THEMES = {
-    "rose": {
-        "user_border": "#3fb950",
-        "asst_border": "#f7527a",
-        "think_border": "#8b949e",
-        "tool_border": "#d29922",
-        "project_border": "#ffb3c6",
-    },
-}
+# Nightwing is the only palette (arkad/tui/theme.py PALETTES), so there is
+# nothing to switch between — these stay in sync with that one palette.
+THEMES: dict[str, dict] = {}
+
 
 def _derive_theme_colors() -> None:
-    """Add a ``THEMES`` entry for every TUI palette not listed above, so
-    newer palettes are selectable everywhere (/theme, settings, restart)."""
+    """Mirror every TUI palette into ``THEMES`` so transcript blocks can pull
+    their border colors from one place."""
     try:
         from .tui.theme import PALETTES
     except Exception:
@@ -228,27 +222,6 @@ _derive_theme_colors()
 _DEFAULT_THEME = "nightwing"
 theme: str = _DEFAULT_THEME
 theme_colors: dict = THEMES[_DEFAULT_THEME]
-
-
-def _reload_saved_theme() -> None:
-    """Restore theme from the unified settings file and sync the TUI theme module."""
-    global theme, theme_colors
-    t = None
-    try:
-        from .storage.settings import get_settings
-        t = get_settings().get("theme")
-    except Exception:
-        pass
-    if t not in THEMES:
-        t = _DEFAULT_THEME
-    theme = t
-    theme_colors = dict(THEMES[t])
-    # Sync the TUI theme module so Python constants update.
-    try:
-        from .tui.theme import set_theme as _set_tui_theme
-        _set_tui_theme(t)
-    except Exception:
-        pass
 
 
 # ── unified persistence — all writes go through settings.json ─────────────
@@ -454,7 +427,6 @@ def apply_settings_to_state() -> None:
     so the running session picks up the new values without a restart.
     """
     global MODEL
-    _reload_saved_theme()
     prev_mcp = global_mcp
     _reload_saved_skills()
     _reload_saved_commands()
@@ -484,7 +456,6 @@ def apply_settings_to_state() -> None:
             pass
 
 
-_reload_saved_theme()
 _reload_saved_skills()
 _reload_saved_commands()
 _reload_saved_think()
