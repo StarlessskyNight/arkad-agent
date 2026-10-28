@@ -128,9 +128,9 @@ _CONTEXT_TOOL_NAMES = {"resolve_context", "read_bundle", "lesson_list", "lesson_
 _FILE_WRITE_TOOLS = frozenset({"write_file", "edit_file", "multi_edit"})
 
 # The free Arkad Agent tier must expose OpenCode's built-in tool names
-# ("bash"/"read") on the wire — see auth/arkad_agent.py. Map any such name
+# ("shell"/"read") on the wire — see auth/arkad_agent.py. Map any such name
 # back to Arkad's real handler before the rest of the dispatcher sees it.
-_FREE_TIER_TOOL_ALIASES = {"bash": "run_bash", "read": "read_file"}
+_FREE_TIER_TOOL_ALIASES = {"shell": "run_bash", "read": "read_file"}
 _DISCOVERY_TOOLS = frozenset({"glob_files", "list_dir", "search_code", "fast_find", "rank_files"})
 
 _tool_pool: ThreadPoolExecutor | None = None

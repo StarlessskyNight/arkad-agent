@@ -1,8 +1,12 @@
-"""Shared rich Console singleton and a safe import for anthropic/rich deps."""
+"""Shared rich Console singleton and a safe import for anthropic/rich deps.
+
+The anthropic SDK is imported lazily (via `__getattr__`) so that `from
+..console import console` — the only thing most modules need — does not pull in
+the ~300 ms SDK at import time.
+"""
 import pathlib, sys
 
 try:
-    from anthropic import Anthropic, APIStatusError, APIConnectionError, RateLimitError
     from rich.console import Console
     from rich.panel import Panel
     from rich.markdown import Markdown
@@ -29,6 +33,15 @@ except ModuleNotFoundError:
     raise SystemExit(1)
 
 console = Console()
+
+
+def __getattr__(name: str):
+    """Proxy the names other modules import from here to the anthropic SDK."""
+    if name in {"Anthropic", "APIStatusError", "APIConnectionError", "RateLimitError"}:
+        import anthropic
+
+        return getattr(anthropic, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class ArkadAPIError(Exception):

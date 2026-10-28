@@ -16,7 +16,7 @@ import threading
 import time
 import contextlib
 from dataclasses import dataclass, field
-from typing import Any, Callable, Generator, Optional
+from typing import TYPE_CHECKING, Any, Callable, Generator, Optional
 
 from .http_timeout import arkad_http_timeout, http_read_timeout_seconds
 from ..utils.tool_images import data_url, split_tool_result
@@ -47,9 +47,10 @@ from ..utils.json_repair import repair_json_arguments as _repair_truncated_json
 # _ContentBlock replaces the old @dataclass approach so blocks support
 # both attribute access (render.py) and .get()/.model_dump() (trim.py / JSON).
 
-from openai import OpenAI
-
 from ..constants import OPENCODE_BASE_URL
+
+if TYPE_CHECKING:  # the SDK (~300 ms) loads when a client is built, not at import
+    from openai import OpenAI
 
 
 OPENCODE_THINK_OFF_EFFORT = "none"
@@ -736,6 +737,7 @@ class _OpenCodeMessages:
     def __init__(self, oai_client: OpenAI, owner: "OpenCodeClient | None" = None):
         self._client = oai_client
         self._owner = owner
+        self.system_suffix = owner.system_suffix if owner is not None else None
 
     def _create_completion(self, **kwargs):
         extra = self._owner.next_request_headers() if self._owner else None
@@ -766,8 +768,10 @@ class _OpenCodeMessages:
                 sys_text = str(system)
 
         owner = self._owner
+        if owner is not None and owner.system_suffix is not None:
+            sys_text = owner.system_suffix(sys_text)
         # Responses-only models (free-tier muse-spark) 500 on /chat/completions;
-        # route them to /responses with the same bash/read identity gate.
+        # route them to /responses with the same shell/read identity gate.
         if owner is not None and owner.api_format(model) == "responses":
             from .codex_client import (
                 _anthropic_messages_to_responses_input,
@@ -806,7 +810,7 @@ class _OpenCodeMessages:
             except Exception as e:
                 err = str(e).lower()
                 # Model doesn't support tools — retry without them, but never
-                # on the free tier: without its bash/read gate tools the
+                # on the free tier: without its shell/read gate tools the
                 # gateway 403s FreeTierError, masking the real error (same
                 # guard as the chat branch below).
                 if resp_tools and not owner.gate_tools and ("tool" in err or "function" in err):
@@ -872,7 +876,7 @@ class _OpenCodeMessages:
 
         oai_tools = _anthropic_tools_to_openai(tools) if tools else []
         # Free Arkad Agent tier gate: the Zen gateway 403s (FreeTierError)
-        # any request whose tool list lacks tools literally named "bash" and
+        # any request whose tool list lacks tools literally named "shell" and
         # "read". Arkad's equivalents are run_bash/read_file, so inject the
         # gate schemas whenever the client is configured with them.
         gate = self._owner.gate_tools if self._owner is not None else None
@@ -914,7 +918,7 @@ class _OpenCodeMessages:
                 err = str(e)
                 # Don't silently swallow reasoning_content errors — they need
                 # the above fix, not a tool-removal retry. Never on the free
-                # tier: without its bash/read gate tools it 403s FreeTierError,
+                # tier: without its shell/read gate tools it 403s FreeTierError,
                 # hiding the real error.
                 if oai_tools and not gate and ("reasoning_content" not in err.lower() and
                                                ("invalid_request" in err or
@@ -960,6 +964,8 @@ class OpenCodeClient:
         model_hints: Callable[[str], dict | None] | None = None,
         max_tokens_param: str = "max_tokens",
         extra_body: dict | None = None,
+        http_client: Any = None,
+        system_suffix: Callable[[str], str] | None = None,
     ):
         self._request_id_header = request_id_header
         self._request_id_prefix = request_id_prefix
@@ -976,7 +982,7 @@ class OpenCodeClient:
         self.max_tokens_param = max_tokens_param
         # Tool schemas that must accompany every request even when the caller
         # supplied none. Used by the free Arkad Agent tier, whose gateway
-        # only accepts requests carrying tools named "bash"+"read".
+        # only accepts requests carrying tools named "shell"+"read".
         self.gate_tools: list[dict] = list(gate_tools) if gate_tools else []
         # Models whose upstream 400'd a reasoning_effort and took the request
         # without it: never sent to them again this session.
@@ -984,12 +990,19 @@ class OpenCodeClient:
         # Extra JSON fields merged into every chat.completions request body
         # (e.g. local servers' ``options: {num_ctx: N}``).
         self.extra_body: dict = dict(extra_body or {})
+        # Optional transform applied to the assembled system prompt before it
+        # goes on the wire. The free Arkad Agent tier uses it to append the
+        # OpenCode CLI's <env> block, which its gateway fingerprints.
+        self.system_suffix = system_suffix
         hdrs = dict(default_headers or {})
+        from openai import OpenAI
+
         self._oai = OpenAI(
             api_key=api_key,
             base_url=base_url or f"{OPENCODE_BASE_URL}/",
             default_headers=hdrs or None,
             timeout=arkad_http_timeout(openrouter=True),
+            http_client=http_client,
         )
         self.messages = _OpenCodeMessages(self._oai, owner=self)
 

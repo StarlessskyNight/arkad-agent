@@ -140,9 +140,9 @@ def test_model_that_insists_on_tools_is_refused_then_answers(model):
 
 
 def test_clients_that_force_tools_get_an_answer_tool(model):
-    """The free tier adds bash/read to every request; answer via corrected_text."""
+    """The free tier adds shell/read to every request; answer via corrected_text."""
     client = model(lambda m: "unused")
-    client.gate_tools = [{"name": "bash"}, {"name": "read"}]
+    client.gate_tools = [{"name": "shell"}, {"name": "read"}]
 
     @contextlib.contextmanager
     def stream(**kwargs):

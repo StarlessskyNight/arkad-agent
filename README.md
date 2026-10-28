@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue.svg" alt="License: GPL-3.0"></a>
-  <a href="https://github.com/StarlessskyNight/arkad-agent/blob/main/arkad/constants/models.py"><img src="https://img.shields.io/badge/version-1.0.3-orange.svg" alt="Version 1.0.3"></a>
+  <a href="https://github.com/StarlessskyNight/arkad-agent/blob/main/arkad/constants/models.py"><img src="https://img.shields.io/badge/version-1.0.4-orange.svg" alt="Version 1.0.4"></a>
   <a href="#installation"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-1f2a4d" alt="Platforms"></a>
 
 ## About

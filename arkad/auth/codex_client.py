@@ -4,9 +4,10 @@ from __future__ import annotations
 import contextlib
 import json
 from dataclasses import dataclass, field
-from typing import Any, Generator, Optional
+from typing import TYPE_CHECKING, Any, Generator, Optional
 
-from openai import OpenAI
+if TYPE_CHECKING:  # the SDK (~300 ms) loads when a client is built, not at import
+    from openai import OpenAI
 
 from ..constants.providers import CODEX_BASE_URL
 from ..utils.json_repair import repair_json_arguments
@@ -303,6 +304,8 @@ class CodexClient:
     """Drop-in Anthropic client replacement for OpenAI Codex (ChatGPT OAuth)."""
 
     def __init__(self, access_token: str, *, base_url: str = CODEX_BASE_URL):
+        from openai import OpenAI
+
         self._access_token = access_token
         # OpenAI SDK uses api_key for Authorization: Bearer (not auth_token).
         self._oai = OpenAI(

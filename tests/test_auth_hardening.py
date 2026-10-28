@@ -5,7 +5,7 @@
   default.
 - ``arkad/auth/opencode_client.py`` (responses branch): a tool-related upstream
   error used to retry with ALL tools stripped — including the free tier's
-  bash/read identity gate, which guarantees a masked 403 FreeTierError. The
+  shell/read identity gate, which guarantees a masked 403 FreeTierError. The
   chat branch already refused to strip when gate tools are present; the
   responses branch now matches.
 """
@@ -62,7 +62,7 @@ def test_blank_timeout_env_falls_back_to_default(monkeypatch):
 
 # A model the free-tier gateway serves on /responses (see _zen_wire).
 RESPONSES_MODEL = "muse-spark-1.3-contributor-free"
-_GATE_TOOLS = ["bash", "read"]
+_GATE_TOOLS = ["read", "shell"]
 
 
 def _responses_client(**kwargs):
@@ -87,7 +87,7 @@ def _stream_responses(client, monkeypatch, create, tools=None):
 
 
 def test_responses_tool_error_does_not_drop_the_free_tier_gate(monkeypatch):
-    """Stripping bash/read on retry only ever produced a masked 403."""
+    """Stripping shell/read on retry only ever produced a masked 403."""
     from arkad.auth.arkad_agent import build_arkad_agent_client
 
     client = build_arkad_agent_client()

@@ -20,13 +20,11 @@ import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, TextIO
+from typing import TYPE_CHECKING, Any, Callable, Literal, TextIO
 
-from mcp import Tool
-from mcp.client.session import ClientSession
-from mcp.client.sse import sse_client
-from mcp.client.stdio import get_default_environment, stdio_client, StdioServerParameters
-from mcp.client.streamable_http import streamablehttp_client
+if TYPE_CHECKING:  # the SDK (~150 ms) loads when a server connects, not at import
+    from mcp import Tool
+    from mcp.client.session import ClientSession
 
 from . import secrets as mcp_secrets
 from .auth import AuthCancelled, AuthNeeded, FLOW_TTL, build_provider, coordinator as auth_coordinator, forget_login
@@ -96,6 +94,8 @@ def _open_stdio_errlog(server_name: str) -> TextIO:
 
 def _stdio_env(config: dict[str, Any]) -> dict[str, str]:
     """Build subprocess env: MCP defaults + per-server overrides."""
+    from mcp.client.stdio import get_default_environment
+
     env = get_default_environment()
     user_env = config.get("env")
     if isinstance(user_env, dict):
@@ -965,6 +965,10 @@ class MCPRegistry:
         mode: _AuthMode,
     ) -> None:
         url = str(config["url"])
+        from mcp.client.sse import sse_client
+        from mcp.client.session import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
         headers = dict(config.get("headers") or {}) or None
         auth = None
         if _wants_oauth(config):
@@ -1111,6 +1115,9 @@ class MCPRegistry:
         """Phase 1: create stdio process, session, initialize. Returns None on success, error string on failure."""
         try:
             errlog = _open_stdio_errlog(server_name)
+            from mcp.client.session import ClientSession
+            from mcp.client.stdio import stdio_client, StdioServerParameters
+
             state._stderr_sink = errlog
             params = StdioServerParameters(
                 command=config["command"],
@@ -1183,6 +1190,9 @@ class MCPRegistry:
         """Connect to an SSE-based MCP server."""
         try:
             headers = config.get("headers", {})
+            from mcp.client.sse import sse_client
+            from mcp.client.session import ClientSession
+
             url = config["url"]
 
             streams: list[Any] = []

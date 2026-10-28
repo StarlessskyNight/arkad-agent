@@ -35,7 +35,7 @@ _REPLY_AS_TEXT = "- Do not call tools. Reply with the corrected prompt only: no 
 _REPLY_BY_TOOL = "- Give the corrected prompt by calling corrected_text once. No preamble, no explanation."
 
 # For clients that put tools in every request anyway (the free tier's gateway
-# demands bash/read): those models reach for a tool whatever the instructions
+# demands shell/read): those models reach for a tool whatever the instructions
 # say, so give them the right one. Seen live: 10/10 first-try answers this
 # way vs ~2/10 as plain text.
 _ANSWER_TOOL = {
