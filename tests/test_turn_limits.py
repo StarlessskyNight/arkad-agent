@@ -4,9 +4,10 @@ Both turn loops (legacy ``arkad.main._send_and_loop`` and the TUI mirror
 ``ArkadTUI._run_turn``) used to be unbounded ``while True``: a model that kept
 emitting ``tool_use`` blocks and never returned ``end_turn`` spun forever —
 unbounded token spend, repeated tool side effects, endless DB writes.
-``constants.models.MAX_TURN_ITERATIONS`` (env ``ARKAD_MAX_ITERATIONS``) caps
-model→tool iterations per user turn; the loop then breaks cleanly with a
-user-facing message.
+``constants.models.MAX_TURN_ITERATIONS`` (env ``ARKAD_MAX_ITERATIONS``, off by
+default) optionally caps model→tool iterations per user turn; the loop then
+breaks cleanly with a user-facing message. Arkad ships uncapped, like the Jarvis
+harness: the repeated-action guard below is what stops a stuck turn.
 
 Also pins the legacy loop clearing ``state.cancel_requested`` at turn start
 (only the TUI used to do that) and its cancel checkpoints around the
@@ -169,10 +170,10 @@ def test_env_cap_override_is_used_by_the_loop(monkeypatch):
 @pytest.mark.parametrize(
     "value,expected",
     [
-        ("banana", 50),   # unparseable → default
-        ("", 50),         # empty → default
-        ("0", 1),         # clamped up (cap must allow at least one call)
-        ("-7", 1),        # clamped up
+        ("banana", 0),   # unparseable → default (off)
+        ("", 0),         # empty → default (off)
+        ("0", 0),        # explicit off
+        ("-7", 0),       # clamped up to off
         ("999999", 500),  # clamped down
     ],
 )
@@ -392,7 +393,7 @@ def test_repeated_legacy_turn_warns_then_stops(monkeypatch):
 
     m._send_and_loop("keep calling the same thing")
 
-    # limit 3 → warn on #3, stop on #4 — far short of the 50-iteration cap.
+    # limit 3 → warn on #3, stop on #4 — nowhere near the optional cap.
     assert calls["n"] == 4, calls["n"]
     assert any("repeated action" in p for p in printed), printed
     assert any("repeated-action guard" in p for p in printed), printed
@@ -409,13 +410,48 @@ def test_repeated_legacy_turn_warns_then_stops(monkeypatch):
 
 
 def test_model_that_changes_its_mind_keeps_going(monkeypatch):
-    """Many *different* calls in a row is ordinary work, not a loop."""
-    paths = [{"path": f"f{i}.py"} for i in range(50)]
-    m, _state, calls, printed = _repeat_harness(monkeypatch, paths)
+    """Many *different* calls in a row is ordinary work, not a loop — and with no
+    cap set (the default) the turn runs as long as it is making progress."""
+    import arkad.main as m
+
+    state = _isolate_state(monkeypatch)
+    calls = {"n": 0}
+    printed: list[str] = []
+
+    def fake_stream():
+        calls["n"] += 1
+        if calls["n"] > 60:
+            return _resp([_text("done")], stop_reason="end_turn")
+        return _resp([_tool(input={"path": f"f{calls['n']}.py"})], stop_reason="tool_use")
+
+    def fake_render(resp):
+        has_tool = any(getattr(b, "type", "") == "tool_use" for b in resp.content)
+        if has_tool:
+            state.messages.append({"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]})
+        return has_tool
+
+    monkeypatch.setattr(m, "call_claude_stream", fake_stream)
+    monkeypatch.setattr(m, "render_assistant", fake_render)
+    monkeypatch.setattr(m, "console", _FakeConsole(printed))
+    assert M.MAX_TURN_ITERATIONS == 0, "the runaway cap ships off"
 
     m._send_and_loop("read a lot of files")
-    assert calls["n"] == 50, "distinct calls never trip the guard — the cap ends the turn"
+
+    assert calls["n"] == 61, "no cap: the turn keeps going well past 50 model calls"
     assert not any("repeated" in p for p in printed), printed
+    assert not any("runaway guard" in p for p in printed), printed
+
+
+def test_an_opt_in_cap_still_stops_the_runaway_loop(monkeypatch):
+    """Setting ARKAD_MAX_ITERATIONS still works for anyone who wants a ceiling."""
+    paths = [{"path": f"f{i}.py"} for i in range(60)]
+    m, _state, calls, printed = _repeat_harness(monkeypatch, paths)
+    monkeypatch.setattr(M, "MAX_TURN_ITERATIONS", 8)
+
+    m._send_and_loop("read a lot of files")
+
+    assert calls["n"] == 8
     assert any("runaway guard" in p for p in printed), printed
 
 

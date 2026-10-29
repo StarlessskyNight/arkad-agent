@@ -23,13 +23,13 @@ MODEL = os.getenv("CLAUDE_MODEL", ARKAD_AGENT_FALLBACK_MODEL)
 MAX_TOOL_OUTPUT = 6000   # trimmed from 15000 — cuts tool-result token cost ~60%
 MAX_FILE_READ = 200_000
 MAX_PARALLEL_TOOLS = _env_int("ARKAD_MAX_PARALLEL_TOOLS", 64, 1, 64)
-# Runaway guard: max model→tool iterations inside ONE user turn, enforced by
-# both turn loops (legacy main._send_and_loop and TUI _run_turn). A model that
-# keeps emitting tool_use blocks never reaches end_turn — without this cap the
-# loop spins forever (token spend + repeated tool side effects). The counter
-# resets every turn; the loops stop cleanly with a user-facing message once
-# this many model calls have run. Override: ARKAD_MAX_ITERATIONS (clamped 1..500).
-MAX_TURN_ITERATIONS = _env_int("ARKAD_MAX_ITERATIONS", 50, 1, 500)
+# Runaway guard: optional cap on model→tool iterations inside ONE user turn.
+# Off by default (0) — Arkad runs a turn as long as the model keeps making
+# progress, the same way the Jarvis harness does. Set ARKAD_MAX_ITERATIONS to a
+# positive number to stop a turn early (token spend + repeated tool side
+# effects). The counter resets every turn; both turn loops (legacy
+# main._send_and_loop and TUI _run_turn) honour it. Clamped 0..500.
+MAX_TURN_ITERATIONS = _env_int("ARKAD_MAX_ITERATIONS", 0, 0, 500)
 # Repeated-action detection: consecutive iterations that re-issue an *identical*
 # tool call (same name, same arguments). At this many in a row the loop tells the
 # model it is looping; one more identical call and the turn stops — much cheaper

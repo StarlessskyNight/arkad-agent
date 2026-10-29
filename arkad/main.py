@@ -324,13 +324,13 @@ def _send_and_loop(inp: str | list[dict]):
         while True:
             if state.cancel_requested.is_set():
                 raise KeyboardInterrupt()
-            # Runaway guard: the model kept issuing tool calls and never
-            # reached end_turn — stop the turn instead of spinning forever.
-            if iterations >= MAX_TURN_ITERATIONS:
+            # Runaway guard (opt-in): the model kept issuing tool calls and
+            # never reached end_turn — stop the turn instead of spinning forever.
+            if MAX_TURN_ITERATIONS and iterations >= MAX_TURN_ITERATIONS:
                 console.print(
                     f"[red]✗ runaway guard: stopped after {MAX_TURN_ITERATIONS} "
                     "model iterations in one turn[/] "
-                    "[dim](set ARKAD_MAX_ITERATIONS to raise)[/]"
+                    "[dim](set ARKAD_MAX_ITERATIONS to change it, 0 = no cap)[/]"
                 )
                 break
             iterations += 1

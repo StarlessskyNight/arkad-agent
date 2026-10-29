@@ -1,10 +1,10 @@
 """Repeated-action detection for the model→tool turn loops.
 
-The runaway guard (``constants.models.MAX_TURN_ITERATIONS``) is a hard ceiling:
-it stops a turn that has already spent the whole budget. This module catches the
-common shape much earlier — a model re-issuing the *same* tool call with the
-*same* arguments turn after turn (a file it can't find, a command that keeps
-failing, a search that returns nothing new).
+The optional runaway guard (``constants.models.MAX_TURN_ITERATIONS``, off by
+default) is a hard ceiling: it stops a turn that has already spent a whole
+budget. This module catches the common shape much earlier — a model re-issuing
+the *same* tool call with the *same* arguments turn after turn (a file it can't
+find, a command that keeps failing, a search that returns nothing new).
 
 Policy: warn once at ``REPEAT_CALL_LIMIT``, then stop if it happens again. A
 single nudge keeps legitimate repeat loops alive ("run the tests until green"

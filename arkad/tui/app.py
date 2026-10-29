@@ -1696,15 +1696,16 @@ class ArkadTUI(QueueMixin, WebRemoteMixin, ActivityMixin, PromptNavMixin, LoopMi
             while True:
                 if stale() or state.turn_cancelled():
                     raise KeyboardInterrupt()
-                # Runaway guard: the model kept issuing tool calls and never
-                # reached end_turn — stop the turn instead of spinning forever.
-                # Breaks cleanly (no KeyboardInterrupt): the assistant replies
-                # already landed, and the finally below still runs _turn_done.
-                if iterations >= MAX_TURN_ITERATIONS:
+                # Runaway guard (opt-in): the model kept issuing tool calls and
+                # never reached end_turn — stop the turn instead of spinning
+                # forever. Breaks cleanly (no KeyboardInterrupt): the assistant
+                # replies already landed, and the finally below still runs
+                # _turn_done.
+                if MAX_TURN_ITERATIONS and iterations >= MAX_TURN_ITERATIONS:
                     self._tui_console.print(
                         f"[{ui.ERR}]✗ runaway guard: stopped after "
                         f"{MAX_TURN_ITERATIONS} model iterations in one turn[/] "
-                        f"[{ui.FG_DIM}](set ARKAD_MAX_ITERATIONS to raise)[/]"
+                        f"[{ui.FG_DIM}](set ARKAD_MAX_ITERATIONS to change it, 0 = no cap)[/]"
                     )
                     break
                 iterations += 1
