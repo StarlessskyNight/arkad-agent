@@ -42,7 +42,10 @@ PREFIX = "md:"
 DEFAULT_TIMEOUT = 15.0
 # Bump when the trimmed cache layout or the support rules change: an older
 # cache is then ignored (and refetched in full) instead of misread.
-SCHEMA = 2  # 2: built-ins keep deprecated rows + record the ids they skip
+# 2: built-ins keep deprecated rows + record the ids they skip.
+# 3: a built-in gateway's per-model wire path (OpenCode Zen/Go) is native-endpoint
+#    metadata, not another provider — schema 2 caches had dropped Zen entirely.
+SCHEMA = 3
 
 REQUEST_HEADERS = {
     "Accept": "application/json",
@@ -220,14 +223,29 @@ def _price(cost: dict | None, key: str) -> float | None:
         return None
 
 
-def _model_wire(provider_wire: str, provider_npm: str, mid: str, raw: dict) -> str | None:
-    """How this model is reached on its provider's client; None = it can't be."""
+def _model_wire(provider_wire: str, provider_npm: str, mid: str, raw: dict,
+                same_gateway: bool = False) -> str | None:
+    """How this model is reached on its provider's client; None = it can't be.
+
+    ``same_gateway`` marks a built-in provider (``NATIVE_IDS``): models.dev lists
+    one entry per model there, each carrying the wire-specific path the gateway
+    serves it on (OpenCode Zen: ``…/inference/openai/v1``, ``…/anthropic/v1``,
+    ``…/google/v1beta``). Those are native-endpoint hints for one gateway, not
+    another provider: Console translates every text model onto each of its
+    endpoints, so the built-in OpenAI-compatible client reaches all of them.
+    Catalog providers keep the strict rule: a model on a base URL of its own
+    cannot share their client.
+    """
     over = raw.get("provider") if isinstance(raw.get("provider"), dict) else {}
-    if over.get("api"):
+    if over.get("api") and not same_gateway:
         return None  # served from a different base URL than the provider's
     npm = over.get("npm") or provider_npm
     if provider_wire == WIRE_ANTHROPIC:
         return "chat" if npm == _ANTHROPIC else None
+    if same_gateway:
+        # Console does not translate the Responses API: a Responses-only model
+        # posted to chat/completions still 500s, so that exception stays.
+        return "responses" if npm == _OPENAI_RESPONSES else "chat"
     if npm == _OPENAI_RESPONSES:
         if provider_npm == _OPENAI_RESPONSES:
             # OpenAI itself: chat-completions serves everything except the
@@ -243,7 +261,7 @@ def _model_wire(provider_wire: str, provider_npm: str, mid: str, raw: dict) -> s
 
 
 def _trim_model(provider_wire: str, provider_npm: str, raw: dict,
-                keep_deprecated: bool = False) -> dict | None:
+                keep_deprecated: bool = False, same_gateway: bool = False) -> dict | None:
     mid = raw.get("id")
     if not isinstance(mid, str) or not mid:
         return None
@@ -253,7 +271,8 @@ def _trim_model(provider_wire: str, provider_npm: str, raw: dict,
     out = modalities.get("output") or ["text"]
     if "text" not in out:
         return None  # image / audio / embedding models
-    wire = _model_wire(provider_wire, provider_npm, mid, raw)
+    wire = _model_wire(provider_wire, provider_npm, mid, raw,
+                       same_gateway=same_gateway)
     if wire is None:
         return None
     limit = raw.get("limit") or {}
@@ -335,7 +354,8 @@ def trim(raw: dict) -> dict:
             if isinstance(m, dict):
                 # Built-ins keep "deprecated" rows: it's a retirement notice, and
                 # the provider's own served list says whether it still runs.
-                row = _trim_model(wire_for_models, npm_for_models, m, keep_deprecated=native)
+                row = _trim_model(wire_for_models, npm_for_models, m,
+                                  keep_deprecated=native, same_gateway=native)
                 if row:
                     models.append(row)
                 elif native and isinstance(m.get("id"), str):

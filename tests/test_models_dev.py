@@ -147,6 +147,45 @@ def test_per_model_wire_overrides(catalog):
     assert "elsewhere" not in ids, "a model on another base URL can't share the client"
 
 
+def test_builtin_gateway_keeps_models_with_a_per_model_wire_path():
+    """models.dev tags every OpenCode Zen / Go model with the gateway path its
+    native wire uses (…/inference/openai/v1, …/anthropic/v1, …/google/v1beta).
+    Console translates every text model onto all of its endpoints, so those are
+    one gateway, not another provider: treating them as "another base URL"
+    emptied the built-in lists, and /model showed the free-tier fallback alone.
+    """
+    raw = {
+        "opencode": _prov("OpenCode Zen", [
+            _m("free-chat", cost=(0, 0),
+               provider={"api": "https://opencode.ai/inference/openai/v1"}),
+            _m("free-anthropic", cost=(0, 0),
+               provider={"npm": "@ai-sdk/anthropic",
+                         "api": "https://opencode.ai/inference/anthropic/v1"}),
+            _m("free-google", cost=(0, 0),
+               provider={"npm": "@ai-sdk/google",
+                         "api": "https://opencode.ai/inference/google/v1beta"}),
+            _m("free-responses", cost=(0, 0),
+               provider={"npm": "@ai-sdk/openai",
+                         "api": "https://opencode.ai/inference/openai/v1"}),
+        ], api="https://opencode.ai/zen/v1"),
+        # A catalog provider keeps the strict rule.
+        "elsewhere": _prov("Elsewhere", [
+            _m("other-host", provider={"api": "https://other.example/v1"}),
+        ], api="https://gateway.example/v1"),
+    }
+    models_dev.store(models_dev.trim(raw), etag='"gateways"')
+
+    by_id = {m.id: m for m in models_dev.native_models("opencode_zen")}
+    assert set(by_id) == {"free-chat", "free-anthropic", "free-google", "free-responses"}
+    assert by_id["free-chat"].wire == "chat"
+    assert by_id["free-anthropic"].wire == "chat", "Console translates Anthropic-wire text models"
+    assert by_id["free-google"].wire == "chat"
+    assert by_id["free-responses"].wire == "responses"
+    assert models_dev.native_skipped("opencode_zen") == frozenset()
+    assert by_id["free-chat"].free
+    assert "md:elsewhere" not in models_dev.providers()
+
+
 def test_openai_itself_uses_chat_except_responses_only_models(catalog):
     by_id = {m.id: m for m in models_dev.models("md:openai")}
     assert by_id["gpt-9"].wire == "chat"
@@ -360,8 +399,9 @@ def test_opencode_go_comes_from_models_dev_only(catalog):
     """No hard-coded Go models: the list, prices and vision are models.dev's."""
     assert [m.id for m in pv.MODELS if m.provider == pv.PROVIDER_OPENCODE] == []
     ids = [m for m, _ in pv.opencode_go_models_for_picker()]
-    assert ids == ["brand-new-go", "gpt-go", "kimi-k2.6"]  # usable, newest, then by name
-    assert "minimax-anthropic" not in ids
+    assert ids == ["brand-new-go", "gpt-go", "kimi-k2.6", "minimax-anthropic"]  # newest, then by name
+    # Anthropic-wire models are listed too: Console translates them to the
+    # gateway's OpenAI-compatible surface, so one client reaches every text model.
     assert pv.native_responses_models(pv.PROVIDER_OPENCODE) == {"gpt-go"}
     assert pv.model_pricing("kimi-k2.6", pv.PROVIDER_OPENCODE) == (1.0, 2.0)
     # Listed by models.dev for Go → belongs.
@@ -438,24 +478,25 @@ def test_arkad_agent_lists_zens_free_rows(catalog, monkeypatch):
 
 def test_gateway_list_is_what_it_serves_with_models_dev_details(catalog, monkeypatch):
     """models.dev lags the gateway: a served model models.dev doesn't know yet
-    is listed by id, one models.dev routes to another wire never shows, and —
-    like OpenCode — one models.dev marks deprecated never shows either, even
-    while the gateway still serves it (deepseek-v4-flash-free: 400)."""
+    is listed by id, and — like OpenCode — one models.dev marks deprecated never
+    shows, even while the gateway still serves it (deepseek-v4-flash-free: 400).
+    A model models.dev routes over the Anthropic wire is listed: Console
+    translates it onto the OpenAI-compatible surface arkad talks to."""
     from arkad.auth import opencode_catalog
 
     served = {"gpt-go", "kimi-k2.6", "old-but-served", "minimax-anthropic", "glm-new"}
     monkeypatch.setattr(opencode_catalog, "served_ids",
                         lambda provider: served if provider == pv.PROVIDER_OPENCODE else set())
     rows = dict(pv.opencode_go_models_for_picker())
-    assert list(rows) == ["gpt-go", "kimi-k2.6", "glm-new"]
+    assert list(rows) == ["gpt-go", "kimi-k2.6", "minimax-anthropic", "glm-new"]
     # Deprecated: not listed, not kept as a saved model, swapped on startup.
     assert not pv.model_belongs_to_provider("old-but-served", pv.PROVIDER_OPENCODE)
     assert pv.normalize_model_for_provider("old-but-served", pv.PROVIDER_OPENCODE) == "gpt-go"
     assert rows["glm-new"] == "Not on models.dev yet, price unknown"
     assert pv.model_pricing("glm-new", pv.PROVIDER_OPENCODE) is None
-    # Usable and kept on startup; the other-wire model is not.
+    # Usable and kept on startup — Anthropic wire included (Console translates).
     assert pv.model_belongs_to_provider("glm-new", pv.PROVIDER_OPENCODE)
-    assert not pv.model_belongs_to_provider("minimax-anthropic", pv.PROVIDER_OPENCODE)
+    assert pv.model_belongs_to_provider("minimax-anthropic", pv.PROVIDER_OPENCODE)
     assert pv.normalize_model_for_provider("glm-new", pv.PROVIDER_OPENCODE) == "glm-new"
     # The default is never a retiring or undescribed model.
     assert pv.opencode_go_default_model() == "gpt-go"
